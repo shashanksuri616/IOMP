@@ -1,0 +1,19 @@
+#lights {
+  position: fixed;
+  inset: 0;          /* fill container */
+  width: 100vw;      /* avoid subpixel gaps */
+  height: 100vh;
+  overflow: hidden;
+  z-index: -10;      /* behind UI */
+  pointer-events: none; /* don't block clicks */
+  backface-visibility: hidden; /* prevent ghosting */
+  transform: translateZ(0);
+  contain: paint;
+}
+
+/* more specific to avoid leaking styles */
+#lights canvas {
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
+}

@@ -207,6 +207,58 @@ class RAGService:
             self._indices_by_user[user_id] = {"active": None, "indices": {}}
         return self._indices_by_user[user_id]
 
+    # --- Index management helpers ---
+    def list_indices(self, user_id: str) -> Dict[str, Any]:
+        slot = self._ensure_user_slot(user_id)
+        out = {"active": slot.get("active"), "indices": []}
+        for name, meta in slot.get("indices", {}).items():
+            chunks = meta.get("chunks", [])
+            out["indices"].append({
+                "name": name,
+                "chunks": len(chunks),
+                "has_emb": bool(meta.get("emb_path")),
+            })
+        return out
+
+    def delete_index(self, user_id: str, index_name: str) -> Dict[str, Any]:
+        slot = self._ensure_user_slot(user_id)
+        existed = index_name in slot["indices"]
+        # Remove from memory
+        if existed:
+            slot["indices"].pop(index_name, None)
+        # Remove from disk
+        idx_dir = self._index_dir(user_id, index_name)
+        removed_disk = False
+        try:
+            if idx_dir.exists():
+                # cautious delete
+                for p in reversed(sorted(idx_dir.rglob("*"))):
+                    try:
+                        p.unlink()
+                    except Exception:
+                        pass
+                try:
+                    idx_dir.rmdir()
+                except Exception:
+                    pass
+                # if still exists, try shutil
+                if idx_dir.exists():
+                    import shutil as _shutil
+                    _shutil.rmtree(idx_dir, ignore_errors=True)
+                removed_disk = not idx_dir.exists()
+        except Exception:
+            removed_disk = False
+        # Reassign active if needed
+        if slot.get("active") == index_name:
+            remaining = list(slot["indices"].keys())
+            slot["active"] = remaining[0] if remaining else None
+            try:
+                with (self._user_dir(user_id) / "active.txt").open("w", encoding="utf-8") as f:
+                    f.write(slot["active"] or "")
+            except Exception:
+                pass
+        return {"removed_memory": existed, "removed_disk": removed_disk, "active": slot.get("active")}
+
     # --- Build (upload-only) ---
     def build_index_from_folder(
         self,
@@ -249,9 +301,9 @@ class RAGService:
 
         # Aggressive memory trimming / truncation controls
         try:
-            trunc_chars = int(os.getenv("TRUNCATE_CHUNK_CHARS", "600"))
+            trunc_chars = int(os.getenv("TRUNCATE_CHUNK_CHARS", "300"))
         except Exception:
-            trunc_chars = 600
+            trunc_chars = 300
         if trunc_chars > 0:
             for c in all_chunks:
                 txt = c.get("text", "")
@@ -260,9 +312,9 @@ class RAGService:
 
         # Total text bytes cap (approx) to avoid huge RAM usage
         try:
-            max_total_bytes = int(os.getenv("MAX_TOTAL_TEXT_BYTES", "8000000"))  # ~8MB default
+            max_total_bytes = int(os.getenv("MAX_TOTAL_TEXT_BYTES", "4000000"))  # ~4MB default
         except Exception:
-            max_total_bytes = 8000000
+            max_total_bytes = 4000000
         running = 0
         if max_total_bytes > 0:
             trimmed: List[Dict[str, Any]] = []
@@ -280,15 +332,16 @@ class RAGService:
 
         # Optional cap to keep memory within limits
         try:
-            max_chunks = int(os.getenv("MAX_CHUNKS_PER_INDEX", "20000"))
+            max_chunks = int(os.getenv("MAX_CHUNKS_PER_INDEX", "3000"))
         except Exception:
-            max_chunks = 20000
+            max_chunks = 3000
         if len(all_chunks) > max_chunks:
             all_chunks = all_chunks[:max_chunks]
 
-        # Compute embeddings (with fallback and batching)
+        # Compute embeddings unless LOW_MEMORY_MODE enabled
         emb = None
-        if all_chunks:
+        low_mem = os.getenv("LOW_MEMORY_MODE", "1") in ("1", "true", "True")
+        if all_chunks and not low_mem:
             texts = [c["text"] for c in all_chunks]
             try:
                 bsz = int(os.getenv("EMB_BATCH", os.getenv("EMB_RETRIEVAL_BATCH", "32")))
@@ -331,6 +384,7 @@ class RAGService:
         """Answer using embedding similarity with memory-safe scanning, MMR, and extractive synthesis.
         Falls back to keyword matching when embeddings are unavailable.
         """
+        low_mem = os.getenv("LOW_MEMORY_MODE", "1") in ("1", "true", "True")
         slot = self._ensure_user_slot(user_id)
         active = slot.get("active")
         if not active:
@@ -355,9 +409,9 @@ class RAGService:
                     qv = model.encode([question], convert_to_numpy=True, normalize_embeddings=True)[0].astype(np.float16)
                     # Streamed dot-product to constrain RAM
                     try:
-                        block = int(os.getenv("RETRIEVAL_BLOCK", "4096"))
+                        block = int(os.getenv("RETRIEVAL_BLOCK", "2048"))
                     except Exception:
-                        block = 4096
+                        block = 2048
                     scores_list: List[np.ndarray] = []
                     n = emb.shape[0]
                     for i in range(0, n, block):
@@ -367,9 +421,9 @@ class RAGService:
 
                     # Candidate pruning
                     try:
-                        top_n = int(os.getenv("TOP_N_CANDIDATES", str(max(20, k*8))))
+                        top_n = int(os.getenv("TOP_N_CANDIDATES", str(max(10, k*5))))
                     except Exception:
-                        top_n = max(20, k*8)
+                        top_n = max(10, k*5)
                     cand_idx = np.argsort(-scores)[: max(k, top_n)]
 
                     # Optional MMR diversification
@@ -412,9 +466,9 @@ class RAGService:
                 # fallback: use hash embedding for query and do dot-product
                 qv = self._hash_embed([question])[0]
                 try:
-                    block = int(os.getenv("RETRIEVAL_BLOCK", "4096"))
+                    block = int(os.getenv("RETRIEVAL_BLOCK", "2048"))
                 except Exception:
-                    block = 4096
+                    block = 2048
                 scores_list: List[np.ndarray] = []
                 n = emb.shape[0]
                 for i in range(0, n, block):
@@ -422,13 +476,13 @@ class RAGService:
                     scores_list.append(np.dot(blk, qv))
                 scores = np.concatenate(scores_list) if scores_list else np.empty((0,), dtype=np.float32)
                 try:
-                    top_n = int(os.getenv("TOP_N_CANDIDATES", str(max(20, k*8))))
+                    top_n = int(os.getenv("TOP_N_CANDIDATES", str(max(10, k*5))))
                 except Exception:
-                    top_n = max(20, k*8)
+                    top_n = max(10, k*5)
                 top_idx = np.argsort(-scores)[: max(k, top_n)][:k]
                 top = [chunks[int(i)] for i in top_idx]
         else:
-            # Fallback keyword matching
+            # Low-memory two-stage retrieval: keyword prune then hash rerank
             q_terms = {t.lower() for t in question.split() if t.strip()}
             scored: List[Tuple[int, Dict[str, Any]]] = []
             for ch in chunks:
@@ -436,7 +490,26 @@ class RAGService:
                 score = sum(1 for t in q_terms if t in text)
                 scored.append((score, ch))
             scored.sort(key=lambda x: x[0], reverse=True)
-            top = [c for _s, c in scored[: max(1, k)]]
+            try:
+                cand_n = int(os.getenv("KEYWORD_CANDIDATES", "120"))
+            except Exception:
+                cand_n = 120
+            cands = [c for _s, c in scored[: max(1, max(cand_n, k))]]
+            if low_mem:
+                texts = [c.get("text", "") for c in cands]
+                C = len(texts)
+                if C > 0:
+                    C = min(C, int(os.getenv("RERANK_MAX", "160")))
+                    texts = texts[:C]
+                    mat = self._hash_embed(texts)
+                    qv = self._hash_embed([question])[0]
+                    scores = np.dot(mat, qv)
+                    order = np.argsort(-scores)[:k]
+                    top = [cands[int(i)] for i in order]
+                else:
+                    top = cands[:k]
+            else:
+                top = cands[:k]
 
         # Optional restore of full texts for answer synthesis if only previews kept
         restore_full = os.getenv("RESTORE_FULL_ON_ANSWER", "1") in ("1", "true", "True")

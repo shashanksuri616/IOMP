@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import List
+from typing import List, Optional
 import os
 import json
 from datetime import datetime
@@ -50,6 +50,9 @@ class AskRequest(BaseModel):
     question: str
     k: int = 5
     user_id: str = "default"
+    mmr: Optional[bool] = None
+    low_memory: Optional[bool] = None
+    max_chars: Optional[int] = None
 
 
 def _project_root() -> str:
@@ -116,6 +119,13 @@ def ask(req: AskRequest):
     if rag_service is None:
         raise HTTPException(status_code=500, detail="rag_service not initialized")
     try:
+        # transient overrides via query body
+        if req.low_memory is not None:
+            os.environ["LOW_MEMORY_MODE"] = "1" if req.low_memory else "0"
+        if req.mmr is not None:
+            os.environ["MMR_ENABLED"] = "1" if req.mmr else "0"
+        if req.max_chars is not None and req.max_chars > 0:
+            os.environ["ANSWER_MAX_CHARS"] = str(req.max_chars)
         result = rag_service.answer(req.question, req.k, user_id=req.user_id)
         short = result.copy()
         ans = short.get("answer", "")
@@ -139,7 +149,40 @@ def config():
             # For per-user we no longer have a global active_index_name; expose summary instead
             "active_index_name": getattr(rag_service, "active_index_name", None),
             "multi_tenant": hasattr(rag_service, "_indices_by_user"),
+            "low_memory_mode": os.getenv("LOW_MEMORY_MODE", "1"),
+            "mmr_enabled": os.getenv("MMR_ENABLED", "0"),
+            "answer_max_chars": os.getenv("ANSWER_MAX_CHARS", "1200"),
         }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/status")
+def status(user_id: str = "default"):
+    if rag_service is None:
+        raise HTTPException(status_code=500, detail="rag_service not initialized")
+    try:
+        summary = rag_service.list_indices(user_id)
+        return {
+            "user_id": user_id,
+            "indices": summary,
+            "embedding_model": getattr(getattr(rag_service, "embeddings", object()), "model_name", "unknown"),
+            "low_memory_mode": os.getenv("LOW_MEMORY_MODE", "1"),
+            "mmr_enabled": os.getenv("MMR_ENABLED", "0"),
+            "last_build_stats": getattr(rag_service, "last_build_stats", {}),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.delete("/index")
+def delete_index(user_id: str, index_name: str):
+    if rag_service is None:
+        raise HTTPException(status_code=500, detail="rag_service not initialized")
+    try:
+        result = rag_service.delete_index(user_id, index_name)
+        _log_event("delete_index", {"user_id": user_id, "index": index_name, **result})
+        return result
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 

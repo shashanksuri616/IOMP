@@ -14,9 +14,15 @@ except Exception:  # pragma: no cover
 
 app = FastAPI(title="IOMP Core RAG Service", version="0.1.0")
 
+cors_origins_env = os.getenv("CORS_ALLOW_ORIGINS", "*")
+if cors_origins_env.strip() == "*":
+    allowed_origins = ["*"]
+else:
+    allowed_origins = [o.strip() for o in cors_origins_env.split(",") if o.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Later: restrict via env var
+    allow_origins=allowed_origins,  # configurable via CORS_ALLOW_ORIGINS env var
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -37,13 +43,18 @@ def _project_root() -> str:
     return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
+def _data_dir() -> str:
+    """Resolve writable data directory. Prefer DATA_DIR env, fallback to repo-root/data."""
+    env_dir = os.getenv("DATA_DIR")
+    path = env_dir if env_dir else os.path.join(_project_root(), "data")
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
 def _log_event(event: str, data: dict) -> None:
     """Minimal JSONL logger to data/log.txt; errors are ignored."""
     try:
-        root = _project_root()
-        data_dir = os.path.join(root, "data")
-        os.makedirs(data_dir, exist_ok=True)
-        log_path = os.path.join(data_dir, "log.txt")
+        log_path = os.path.join(_data_dir(), "log.txt")
         rec = {"ts": datetime.utcnow().isoformat() + "Z", "event": event, **data}
         with open(log_path, "a", encoding="utf-8") as f:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")

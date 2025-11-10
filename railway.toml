@@ -1,0 +1,52 @@
+# Railway configuration-as-code for IOMP (backend + frontend)
+# Docs: https://docs.railway.app/deploy/railway-toml (features may evolve; comments are ignored)
+
+# Multi-service monorepo definition.
+# Adjust env values (especially VITE_API_BASE and CORS_ALLOW_ORIGINS) before first deploy.
+
+[[services]]
+name = "backend"
+root = "IOMP"  # Path relative to repo root when this file lives at top-level; here already in IOMP folder.
+builder = "NIXPACKS"
+buildCommand = "python3 -m pip install --upgrade pip && python3 -m pip install -r backend/requirements.txt"
+startCommand = "python3 -m uvicorn backend.app:app --host 0.0.0.0 --port $PORT"
+healthcheckPath = "/health"
+sleepApplication = false
+numReplicas = 1
+
+[services.env]
+PYTHON_VERSION = "3.11.9"
+EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+# Comma-separated list of allowed origins (NO trailing slashes). Replace with your real domains.
+CORS_ALLOW_ORIGINS = "https://your-frontend.vercel.app,https://your-frontend.onrailway.app"
+# Optional persistent data directory; if you attach a Volume at /app/data set DATA_DIR accordingly.
+DATA_DIR = "/app/data"
+LOG_LEVEL = "info"
+
+# NOTE: Volumes currently must be attached via the Railway UI (Storage tab). After attaching
+# a volume at /app/data the DATA_DIR env above will ensure indices/logs persist.
+
+[[services]]
+name = "frontend"
+root = "IOMP/frontend/app"
+builder = "NIXPACKS"
+buildCommand = "npm ci && npm run build"
+startCommand = "npx serve -s dist -l $PORT"
+healthcheckPath = "/__frontend_health"
+sleepApplication = false
+numReplicas = 1
+
+[services.env]
+# Point to the deployed backend URL (after backend deploy). Update then redeploy frontend.
+VITE_API_BASE = "https://your-backend.up.railway.app"
+NODE_VERSION = "18"
+
+# If you later implement preview environments, you can override VITE_API_BASE per environment.
+
+# -------------------------
+# Optional future tweaks:
+# -------------------------
+# (1) Scale replicas: increase numReplicas.
+# (2) Remove DATA_DIR if you do not need persistence; indices will be ephemeral.
+# (3) Tighten CORS_ALLOW_ORIGINS as soon as custom domains are set.
+# (4) Add additional services (e.g., a worker) by appending another [[services]] block.

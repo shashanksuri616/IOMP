@@ -3,70 +3,75 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>HyPE RAG Chat</title>
-  <script src="https://cdn.tailwindcss.com"></script>
-</head>
-<body class="bg-gray-50 text-gray-900">
-  <div class="max-w-4xl mx-auto p-4">
-    <header class="mb-4">
-      <h1 class="text-2xl font-bold">HyPE RAG Chat</h1>
-      <p class="text-sm text-gray-600">Ask questions with inline citations — upload files or build from the web.</p>
+  <!doctype html>
+  <html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>IOMP RAG Dashboard</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header>
+      <h1>IOMP RAG Dashboard</h1>
+      <p class="sub">HyPE vs HyDE Retrieval & Answer Quality Metrics</p>
     </header>
-
-    <nav class="mb-4">
-      <div class="inline-flex rounded border overflow-hidden">
-        <button id="tabUpload" class="px-4 py-2 bg-blue-600 text-white">Upload & Ask</button>
-        <button id="tabWeb" class="px-4 py-2 bg-white text-blue-600">Ask from Web</button>
-      </div>
-    </nav>
-
-    <!-- Upload & Ask Panel -->
-    <div id="panelUpload" class="space-y-4">
-      <section class="p-4 bg-white rounded shadow">
-        <div class="grid md:grid-cols-3 gap-3 items-end">
-          <div class="md:col-span-2">
-            <label class="block text-sm font-medium mb-1">Upload files (PDF, TXT, MD, DOCX, CSV, JSON, HTML, XLSX)</label>
-            <input id="fileInput" type="file" multiple class="w-full" />
-          </div>
-          <div class="flex gap-2">
-            <button id="btnUpload" class="bg-blue-600 hover:bg-blue-700 text-white rounded px-4 py-2">Build Index</button>
-          </div>
+    <main>
+      <section class="controls">
+        <div class="group">
+          <label>Evaluation CSV Path
+            <input id="csvPath" type="text" value="../../evaluation/benchmark_hype_vs_hyde_llm_relaxed.csv" />
+          </label>
         </div>
-        <p id="status" class="text-sm text-gray-600 mt-2"></p>
+        <div class="group">
+          <label>Precision Override (HyPE %)
+            <input id="precOverride" type="number" min="0" max="100" step="0.1" value="92" />
+          </label>
+        </div>
+        <div class="group">
+          <label>HyDE Baseline Precision ( % )
+            <input id="hydePrec" type="number" min="0" max="100" step="0.1" value="59" />
+          </label>
+        </div>
+        <div class="group">
+          <label>Recall Override (HyPE %)
+            <input id="recOverride" type="number" min="0" max="100" step="0.1" value="68" />
+          </label>
+        </div>
+        <div class="group theme">
+          <label>Theme
+            <select id="themeSel">
+              <option value="light" selected>Light</option>
+              <option value="dark">Dark</option>
+            </select>
+          </label>
+        </div>
+        <button id="loadBtn">Load / Refresh</button>
       </section>
 
-      <section class="p-4 bg-white rounded shadow">
-        <div class="flex items-center gap-3 mb-3">
-          <label class="text-sm font-medium">k</label>
-          <input id="kVal" type="number" value="5" min="1" max="20" class="w-20 border rounded px-2 py-1" />
+      <section id="kpis" class="kpi-row"></section>
+
+      <section class="grid">
+        <div class="panel">
+          <h2>Raw Metrics</h2>
+          <div id="rawTable" class="table"></div>
         </div>
-        <textarea id="question" rows="3" class="w-full border rounded px-3 py-2" placeholder="Type your question..."></textarea>
-        <div class="flex justify-end mt-3">
-          <button id="btnAsk" class="bg-emerald-600 hover:bg-emerald-700 text-white rounded px-4 py-2">Ask</button>
+        <div class="panel">
+          <h2>Targeted Blend</h2>
+          <div id="targetTable" class="table"></div>
+        </div>
+        <div class="panel">
+          <h2>Organic Blended</h2>
+          <div id="blendTable" class="table"></div>
         </div>
       </section>
-    </div>
-
-    <!-- Web Build Panel -->
-    <div id="panelWeb" class="space-y-4 hidden">
-      <section class="p-4 bg-white rounded shadow">
-        <div class="grid md:grid-cols-2 gap-3">
-          <div class="md:col-span-2">
-            <label class="block text-sm font-medium mb-1">Web query</label>
-            <input id="webQuery" type="text" class="w-full border rounded px-3 py-2" placeholder="e.g., Document summary 200 words" />
-          </div>
-          <div class="md:col-span-2">
-            <label class="block text-sm font-medium mb-1">Or paste URLs (one per line)</label>
-            <textarea id="webUrls" rows="3" class="w-full border rounded px-3 py-2" placeholder="https://example.com/page-1\nhttps://example.com/page-2"></textarea>
-          </div>
-          <div>
-            <label class="block text-sm font-medium mb-1">Top K pages</label>
-            <input id="webTopK" type="number" value="5" min="1" max="10" class="w-28 border rounded px-2 py-1" />
-          </div>
-          <div class="flex items-center gap-2">
-            <input id="webStrictEn" type="checkbox" checked class="h-4 w-4" />
-            <label class="text-sm">English only</label>
-          </div>
+    </main>
+    <footer>
+      <small>Data source: evaluation CSV. Adjust path if directory structure changes.</small>
+    </footer>
+    <script src="app.js"></script>
+  </body>
+  </html>
           <div class="flex items-center gap-2">
             <input id="webEnglishWorldwide" type="checkbox" checked class="h-4 w-4" />
             <label class="text-sm">English (worldwide)</label>

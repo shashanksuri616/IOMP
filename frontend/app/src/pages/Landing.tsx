@@ -1,6 +1,7 @@
 import { useTheme } from '@/lib/theme'
 import ThemeSwitcher from '@/components/ThemeSwitcher'
 import PillNav from '@/components/PillNav'
+import PillNavLight from '@/components/PillNavLight'
 // Background now provided globally via Hyperspeed
 import { StarButton } from '@/components/ui/StarButton'
 import { useNavigate } from 'react-router-dom'
@@ -14,6 +15,25 @@ export default function Landing() {
   {/* Global background is injected at App level (Hyperspeed) */}
 
       {/* Floating pill nav (React Bits) */}
+      {theme === 'light' ? (
+      <PillNavLight
+        logo={"data:image/svg+xml;utf8,<?xml version='1.0' encoding='UTF-8'?><svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23ffffff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M3 10.5L12 3l9 7.5'/><path d='M5 10v10h14V10'/><path d='M9 20V12h6v8'/></svg>"}
+        logoAlt="Hype_RAG"
+        logoHref="#home"
+        items={[
+          { label: 'How it works', href: '#learn' },
+          { label: 'Docs', href: '#docs' },
+          { label: 'Try now', href: '/app', ariaLabel: 'Open Workbench' }
+        ]}
+        activeHref={undefined}
+        baseColor="#ffffff"
+        pillColor="#ffffff"
+        hoveredPillTextColor="#1e293b"
+        pillTextColor="#0f172a"
+        onMobileMenuClick={() => {}}
+        initialLoadAnimation={true}
+        className=""
+      />) : (
       <PillNav
         logo={"data:image/svg+xml;utf8,<?xml version='1.0' encoding='UTF-8'?><svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23ffffff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M3 10.5L12 3l9 7.5'/><path d='M5 10v10h14V10'/><path d='M9 20V12h6v8'/></svg>"}
         logoAlt="Hype_RAG"
@@ -31,7 +51,7 @@ export default function Landing() {
         onMobileMenuClick={() => {}}
         initialLoadAnimation={true}
         className=""
-      />
+      />)}
 
       {/* Theme switcher */}
       <div className="fixed top-4 right-4 z-40">
@@ -43,8 +63,8 @@ export default function Landing() {
       {/* Hero with punchline and CTAs */}
       <section className="relative min-h-screen flex items-center justify-center">
         <div className="text-center px-4">
-          <h1 className="text-6xl md:text-8xl font-black tracking-tight drop-shadow-sm select-none">Hype_RAG</h1>
-          <p className="mt-4 text-lg md:text-xl text-gray-300 max-w-2xl mx-auto">
+          <h1 className={`text-6xl md:text-8xl font-black tracking-tight drop-shadow-sm select-none ${theme==='light' ? 'text-slate-900' : ''}`}>Hype_RAG</h1>
+          <p className={`mt-4 text-lg md:text-xl max-w-2xl mx-auto ${theme==='light' ? 'text-slate-600' : 'text-gray-300'}`}>
             RAG ’n’ roll—ask once, get rock‑solid answers.
           </p>
           <div className="mt-8 flex items-center justify-center gap-3">
@@ -68,8 +88,8 @@ export default function Landing() {
             />
           </div>
           <div>
-            <h3 className="text-2xl font-semibold">Reddit‑centric retrieval</h3>
-            <p className="mt-3 text-white leading-7">
+            <h3 className={`text-2xl font-semibold ${theme==='light' ? 'text-slate-900' : ''}`}>Reddit‑centric retrieval</h3>
+            <p className={`mt-3 leading-7 ${theme==='light' ? 'text-slate-700' : 'text-white/90'}`}>
               Hype_RAG is tuned to where the most useful real‑world answers often live: Reddit. You can aggregate
               content from multiple subreddits, boost relevance with topic‑aware ranking, and merge forum signals
               without polluting results with GitHub by default. The goal is to surface grounded, practical knowledge
@@ -93,8 +113,8 @@ export default function Landing() {
             />
           </div>
           <div className="md:order-1">
-            <h3 className="text-2xl font-semibold">Smart fusion and reranking</h3>
-            <p className="mt-3 text-white leading-7">
+            <h3 className={`text-2xl font-semibold ${theme==='light' ? 'text-slate-900' : ''}`}>Smart fusion and reranking</h3>
+            <p className={`mt-3 leading-7 ${theme==='light' ? 'text-slate-700' : 'text-white/90'}`}>
               We combine diverse retrieval signals using fusion techniques, then apply reranking to elevate the most
               contextually relevant chunks for your query. Instead of trusting a single embedding pass, Hype_RAG blends
               lexical and semantic evidence, balances recency with authority, and prevents a single domain from
@@ -117,8 +137,8 @@ export default function Landing() {
             />
           </div>
           <div>
-            <h3 className="text-2xl font-semibold">Upload documents or build from the web</h3>
-            <p className="mt-3 text-white leading-7">
+            <h3 className={`text-2xl font-semibold ${theme==='light' ? 'text-slate-900' : ''}`}>Upload documents or build from the web</h3>
+            <p className={`mt-3 leading-7 ${theme==='light' ? 'text-slate-700' : 'text-white/90'}`}>
               Bring your own documents—PDFs, text, CSVs—or point Hype_RAG at curated web sources to assemble a research
               set on the fly. We chunk intelligently, capture structure where it matters, and maintain links back to
               original material so you can audit any claim. Settings like per‑domain limits and minimum distinct
@@ -140,8 +160,8 @@ export default function Landing() {
             />
           </div>
           <div className="md:order-1">
-            <h3 className="text-2xl font-semibold">Beautiful, fast interactions</h3>
-            <p className="mt-3 text-white leading-7">
+            <h3 className={`text-2xl font-semibold ${theme==='light' ? 'text-slate-900' : ''}`}>Beautiful, fast interactions</h3>
+            <p className={`mt-3 leading-7 ${theme==='light' ? 'text-slate-700' : 'text-white/90'}`}>
               The interface leans into subtle motion and theme‑aware accents so the product feels premium without being
               distracting. React Bits‑style effects give depth, while practical components—buttons, inputs, switches—
               keep flow efficient. You’ll notice the small things: responsive spacing, snappy feedback, consistent

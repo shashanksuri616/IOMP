@@ -5,10 +5,12 @@ import ThemeSwitcher from '@/components/ThemeSwitcher'
 import UploadPanel from '@/components/UploadPanel'
 import AskPanel from '@/components/AskPanel'
 import { useState } from 'react'
+import { useTheme } from '@/lib/theme'
 
 export default function Workbench() {
   const navigate = useNavigate()
   const [mode, setMode] = useState<'none'|'upload'>('none')
+  const { theme } = useTheme()
 
   function scrollToId(id: string) {
     const el = document.getElementById(id)
@@ -44,8 +46,8 @@ export default function Workbench() {
   {/* Minimal intro with two buttons */}
   <main className="min-h-screen flex items-center justify-center px-4 pb-12 md:pb-24">
         <div className="text-center max-w-2xl">
-          <h1 className="text-4xl md:text-5xl font-black tracking-tight">Let’s get you started</h1>
-          <p className="mt-3 text-white/80">Choose how you want to begin.</p>
+          <h1 className={`text-4xl md:text-5xl font-black tracking-tight ${theme==='light' ? 'text-slate-900' : ''}`}>Let’s get you started</h1>
+          <p className={`mt-3 ${theme==='light' ? 'text-slate-600' : 'text-white/80'}`}>Choose how you want to begin.</p>
           <div className="mt-8 flex items-center justify-center gap-3">
             <StarButton ariaLabel="Upload a PDF" tone="accent" size="lg" onClick={() => { setMode('upload'); setTimeout(()=>scrollToId('work-section'), 0) }}>
               Upload a PDF
@@ -58,7 +60,7 @@ export default function Workbench() {
       <section id="work-section" className="px-4 pb-16">
         <div className="max-w-3xl mx-auto space-y-10">
           {mode === 'upload' && (
-            <div id="upload-section" className="rounded-xl border border-white/10 bg-black/10 backdrop-blur p-4 md:p-6 space-y-6">
+            <div id="upload-section" className={`rounded-xl p-4 md:p-6 space-y-6 backdrop-blur border ${theme==='light' ? 'bg-white/95 border-slate-200 shadow-[0_4px_16px_rgba(0,0,0,0.08)]' : 'bg-black/10 border-white/10'}`}>
               <div>
                 <h2 className="text-xl font-semibold mb-4">Upload a PDF</h2>
                 <UploadPanel />

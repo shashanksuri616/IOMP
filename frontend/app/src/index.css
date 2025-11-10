@@ -16,6 +16,19 @@
   --neutral-to: #374151;   /* gray-700 */
 }
 
+/* Light theme explicit variables */
+[data-theme="light"] {
+  --bg-from: 255 255 255;
+  --bg-via: 255 255 255;
+  --bg-to: 248 250 252; /* slate-50 */
+  --fg: 17 24 39; /* gray-900 */
+  --accent-from: #0ea5e9; /* sky-500 */
+  --accent-to: #6366f1;   /* indigo-500 */
+  --accent-glow: rgba(14,165,233,0.35);
+  --neutral-from: #ffffff;
+  --neutral-to: #f1f5f9; /* slate-100 */
+}
+
 [data-theme="dark"] {
   --bg-from: 0 0 0;
   --bg-via: 0 0 0;
@@ -23,12 +36,13 @@
   --fg: 255 255 255;
 }
 
-[data-theme="sapphire"] {
-  --bg-from: 0 0 0;
-  --bg-via: 0 0 0;
-  --bg-to: 0 0 0;
+/* Remove sapphire since theme options reduced; keep block commented for potential restore */
+/* [data-theme="sapphire"] {
+  --bg-from: 15 23 42; 
+  --bg-via: 30 41 59;
+  --bg-to: 2 132 199;
   --fg: 255 255 255;
-}
+} */
 
 html, body, #root { height: 100%; }
 body {
@@ -118,6 +132,33 @@ html { scroll-behavior: smooth; }
     --chart-3: 30 80% 55%;
     --chart-4: 280 65% 60%;
     --chart-5: 340 75% 55%;
+  }
+  /* Light theme HSL tokens mapping for component libs */
+  [data-theme='light'] {
+    --background: 0 0% 100%;
+    --foreground: 240 10% 3.9%;
+    --card: 0 0% 100%;
+    --card-foreground: 240 10% 3.9%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 240 10% 3.9%;
+    --primary: 221 83% 53%; /* blue-600 */
+    --primary-foreground: 0 0% 100%;
+    --secondary: 210 40% 96%;
+    --secondary-foreground: 240 10% 3.9%;
+    --muted: 210 40% 96%;
+    --muted-foreground: 240 5% 45%;
+    --accent: 210 40% 96%;
+    --accent-foreground: 240 5.9% 10%;
+    --destructive: 0 72% 50%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 214 32% 91%;
+    --input: 214 32% 91%;
+    --ring: 221 83% 53%;
+    --chart-1: 199 89% 48%; /* sky-500 */
+    --chart-2: 234 89% 62%; /* indigo-500 */
+    --chart-3: 142 76% 36%; /* green-600 */
+    --chart-4: 24 95% 53%; /* orange-500 */
+    --chart-5: 291 64% 42%; /* fuchsia-600 */
   }
 }
 

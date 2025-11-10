@@ -1,47 +1,21 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
-import Hyperspeed from '@/components/Hyperspeed'
-import { GridScan as GridScanJsx } from '@/components/GridScan'
-import FaultyTerminal from '@/components/FaultyTerminal'
+import Waves from '@/components/Waves'
 import { useTheme } from '@/lib/theme'
 import Landing from '@/pages/Landing'
 import Workbench from '@/pages/Workbench'
 
 export default function App() {
   const { bg, theme } = useTheme()
-  const terminalTint = theme === 'light' ? '#8ec5ff' : theme === 'sapphire' ? '#60a5fa' : '#7dd3fc'
-  const terminalBrightness = theme === 'light' ? 1.2 : theme === 'sapphire' ? 1.1 : 1.05
+  // Waves variant for both themes; parameters differ for contrast
+  const waveProps = theme === 'light'
+    ? { backgroundColor: '#ffffff', lineColor: '#94a3b8', waveAmpX: 32, waveAmpY: 16 } // slate-400 for softer lines
+    : { backgroundColor: '#030712', lineColor: 'rgba(255,255,255,0.12)', waveAmpX: 42, waveAmpY: 20 }
   return (
     <>
-      {/* Global background effect (behind everything) */}
-      {bg === 'gridscan' && (
-        <GridScanJsx
-          className="gridscan--full"
-          style={{}}
-          enableWebcam={false}
-          showPreview={false}
-          enablePost={false}
-          scanOpacity={0.25}
-        />
-      )}
-      {bg === 'terminal' && (
-        <div className="fixed inset-0 -z-10 pointer-events-none">
-          <FaultyTerminal
-            className="w-full h-full"
-            style={{ width: '100%', height: '100%' }}
-            mouseReact={false}
-            pageLoadAnimation={false}
-            brightness={terminalBrightness}
-            scanlineIntensity={0.35}
-            glitchAmount={1.05}
-            flickerAmount={0.3}
-            noiseAmp={0.4}
-            timeScale={0.4}
-            digitSize={1.8}
-            tint={terminalTint}
-          />
-        </div>
-      )}
-      {bg === 'hyperspeed' && <Hyperspeed />}
+      {/* Background: Waves for both themes (dark variant has darker bg + faint light lines) */}
+      <div className="fixed inset-0 -z-10 pointer-events-none">
+        <Waves {...waveProps} />
+      </div>
       <BrowserRouter>
         <Routes>
           <Route path="/" element={<Landing />} />

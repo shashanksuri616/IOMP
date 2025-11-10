@@ -8,7 +8,7 @@ This checklist summarizes the production knobs and endpoints to run the backend 
   - `uvicorn backend.app:app --host 0.0.0.0 --port 8000`
 - Health & status
   - `GET /health` → { status: ok }
-  - `GET /config` → flags (embedding_model, low_memory_mode, mmr_enabled)
+  - `GET /config` → flags (embed_provider, embedding_model, low_memory_mode, mmr_enabled)
   - `GET /status?user_id=default` → indices summary, last build stats
 - Core endpoints
   - `POST /upload` (multipart)
@@ -41,6 +41,19 @@ Set as env vars on your host (platform UI) or `.env`:
 - MMR_LAMBDA=0.5
 - ANSWER_MAX_CHARS=900
 - USE_EMBEDDINGS=0   # flip to 1 when you have RAM and internet to load the ST model
+
+### Embedding provider switch (avoid heavy local models on Render)
+
+Set a provider to keep memory under 512MB:
+
+- `EMBED_PROVIDER=groq`  → use Groq OpenAI‑compatible embeddings over HTTP (no local model)
+  - requires `GROQ_API_KEY`
+  - optional `GROQ_EMBED_MODEL=text-embedding-3-small`
+- `EMBED_PROVIDER=fast`  → use `fastembed` (small local footprint)
+- `EMBED_PROVIDER=hash`  → tiny fallback; quality is lower but memory is minimal
+- `EMBED_PROVIDER=local` → default SentenceTransformer path (needs more RAM)
+
+Inspect at `GET /config` → `embed_provider`, `embedding_model`.
 
 Notes:
 - With LOW_MEMORY_MODE=1, the service uses keyword prune + hash-embedding rerank (no model download needed).

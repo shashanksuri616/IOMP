@@ -5,6 +5,17 @@ from typing import List, Optional
 import os
 import json
 from datetime import datetime
+from pathlib import Path
+
+# Load environment from .env files early so service init sees them
+try:
+    from dotenv import load_dotenv  # type: ignore
+    # backend/.env
+    load_dotenv(dotenv_path=Path(__file__).resolve().parent / ".env", override=False)
+    # repo root .env
+    load_dotenv(dotenv_path=Path(__file__).resolve().parents[1] / ".env", override=False)
+except Exception:
+    pass
 
 rag_service = None
 _init_error: str | None = None
@@ -39,6 +50,32 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.on_event("startup")
+def _startup_preload():
+    """Optionally preload the embedding model to avoid first-request latency.
+    Controlled by FORCE_EMBED_PRELOAD=1 and USE_EMBEDDINGS!=0.
+    """
+    try:
+        if rag_service is None:
+            return
+        if os.getenv("FORCE_EMBED_PRELOAD", "0") not in ("1", "true", "True"):
+            return
+        if os.getenv("USE_EMBEDDINGS", "1") in ("0", "false", "False"):
+            return
+        # Trigger model construction and a tiny warmup encode
+        model = getattr(rag_service, "_get_model", None)
+        if callable(model):
+            m = model()
+            if m is not None:
+                try:
+                    m.encode(["warm up"], batch_size=1, convert_to_numpy=True, normalize_embeddings=True)
+                except Exception:
+                    pass
+    except Exception:
+        # Preload is best-effort; ignore failures
+        pass
 
 
 @app.get("/health")
@@ -107,7 +144,14 @@ def upload_files(
                 "index_name": index_name,
                 "mongo_stats": getattr(rag_service, "last_build_stats", {}),
             }
-            payload["index_dir"] = f"faiss_hype_index_groq/{index_name}"
+            # Reflect actual persisted location for IOMP backend
+            try:
+                from pathlib import Path as _P
+                data_dir = os.getenv("DATA_DIR") or os.path.join(_project_root(), "data")
+                idx_dir = _P(data_dir) / "indices" / user_id / index_name
+                payload["index_dir"] = str(idx_dir)
+            except Exception:
+                payload["index_dir"] = None
             _log_event("upload_build", {"files": names, **payload})
             return payload
     except Exception as e:
@@ -146,6 +190,7 @@ def config():
             "initialized": True,
             "use_mongo_vector": bool(getattr(rag_service, "use_mongo_vector", False)),
             "embedding_model": getattr(getattr(rag_service, "embeddings", object()), "model_name", "unknown"),
+            "embed_provider": getattr(rag_service, "embed_provider_name", "local"),
             # For per-user we no longer have a global active_index_name; expose summary instead
             "active_index_name": getattr(rag_service, "active_index_name", None),
             "multi_tenant": hasattr(rag_service, "_indices_by_user"),

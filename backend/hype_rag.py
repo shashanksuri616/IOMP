@@ -17,8 +17,20 @@ import os
 import numpy as np
 import json
 from pathlib import Path
+from typing import cast
 
 from .helper_functions import read_text_from_file, split_into_chunks
+
+# Optional unified embedding provider (remote/local/hash). If EMBED_PROVIDER != 'local',
+# we use embedding_provider. Kept optional to avoid import errors when file is absent.
+try:
+    from .embedding_provider import EmbeddingProvider  # type: ignore
+except Exception:
+    try:
+        # fallback to project root if module placed there
+        from embedding_provider import EmbeddingProvider  # type: ignore
+    except Exception:
+        EmbeddingProvider = None  # type: ignore
 
 
 @dataclass
@@ -30,15 +42,40 @@ class RAGService:
     def __init__(self) -> None:
         # minimal state
         self.embeddings = EmbeddingsInfo()
+        self.embed_provider_name = os.getenv("EMBED_PROVIDER", "local").lower()
+        self._embed_provider = None
+        if self.embed_provider_name != "local" and EmbeddingProvider is not None:
+            try:
+                self._embed_provider = EmbeddingProvider()
+                # reflect reported model
+                try:
+                    # prefer remote/local model name if available
+                    if getattr(self._embed_provider, "remote_model_name", None):
+                        self.embeddings.model_name = getattr(self._embed_provider, "remote_model_name")
+                    elif getattr(self._embed_provider, "local_model_name", None):
+                        self.embeddings.model_name = getattr(self._embed_provider, "local_model_name")
+                    else:
+                        self.embeddings.model_name = f"provider:{self.embed_provider_name}"
+                except Exception:
+                    self.embeddings.model_name = f"provider:{self.embed_provider_name}"
+            except Exception:
+                # fallback: will use hash path in _encode_texts
+                self._embed_provider = None
         self.use_mongo_vector = False
         # Per-user multi-tenant storage
         # _indices_by_user[user_id] = { 'active': str|None, 'indices': { index_name: { 'chunks': List[dict], 'emb': np.ndarray } } }
         self._indices_by_user: Dict[str, Dict[str, Any]] = {}
         self.last_build_stats: Dict[str, Any] = {}
         self._model = None
+        # Mongo state
+        self._mongo_client = None
+        self._mongo_db = None
+        self._mongo_col = None
         # on boot, try load any persisted indices
         try:
-            self._load_from_disk()
+            self._init_mongo_if_configured()
+            if not self.use_mongo_vector:
+                self._load_from_disk()
         except Exception:
             # non-fatal; continue with empty in-memory state
             pass
@@ -153,6 +190,9 @@ class RAGService:
             slot["active"] = active
 
     def _get_model(self):
+        # If using non-local provider, don't initialize sentence-transformers
+        if self.embed_provider_name != "local":
+            return None
         if self._model is None:
             try:
                 from sentence_transformers import SentenceTransformer
@@ -168,6 +208,31 @@ class RAGService:
                 # fallback: no model, keep None; we'll degrade to keyword matching
                 self._model = None
         return self._model
+
+    # ---- Mongo helpers ----
+    def _init_mongo_if_configured(self) -> None:
+        uri = os.getenv("MONGO_URI")
+        if not uri:
+            self.use_mongo_vector = False
+            return
+        try:
+            from pymongo import MongoClient
+        except Exception:
+            # pymongo not installed; disable mongo mode
+            self.use_mongo_vector = False
+            return
+        self._mongo_client = MongoClient(uri)
+        db_name = os.getenv("MONGO_DB", "iomp")
+        # allow alternate env names used in .env
+        col_name = os.getenv("MONGO_COLLECTION") or os.getenv("MONGO_VCOLL") or os.getenv("MONGO_COLL") or "chunks"
+        self._mongo_db = self._mongo_client[db_name]
+        self._mongo_col = self._mongo_db[col_name]
+        self.use_mongo_vector = True
+
+    def _col(self):
+        if self._mongo_col is None:
+            raise RuntimeError("Mongo collection not initialized; set MONGO_URI")
+        return self._mongo_col
 
     # ---- Lightweight hash embeddings fallback when ST model unavailable ----
     def _hash_embed(self, texts: List[str], dim: int = 384) -> np.ndarray:
@@ -190,6 +255,16 @@ class RAGService:
         return mat.astype(np.float16)
 
     def _encode_texts(self, texts: List[str], batch_size: int = 32) -> np.ndarray:
+        # Non-local provider path (remote/fast/hash via adapter)
+        if self._embed_provider is not None:
+            try:
+                vecs = self._embed_provider.embed(texts)  # type: ignore[attr-defined]
+                return vecs.astype(np.float16)
+            except Exception:
+                # fallback to hash
+                self.embeddings.model_name = f"hash-embeddings"
+                return self._hash_embed(texts)
+        # Local sentence-transformers
         model = self._get_model()
         if model is None:
             # fallback hashing
@@ -209,55 +284,86 @@ class RAGService:
 
     # --- Index management helpers ---
     def list_indices(self, user_id: str) -> Dict[str, Any]:
-        slot = self._ensure_user_slot(user_id)
-        out = {"active": slot.get("active"), "indices": []}
-        for name, meta in slot.get("indices", {}).items():
-            chunks = meta.get("chunks", [])
-            out["indices"].append({
-                "name": name,
-                "chunks": len(chunks),
-                "has_emb": bool(meta.get("emb_path")),
-            })
-        return out
+        if self.use_mongo_vector:
+            active = self._ensure_user_slot(user_id).get("active")
+            try:
+                col = self._col()
+                names = col.distinct("index_name", {"user_id": user_id})
+                out_list = []
+                for nm in names:
+                    cnt = col.count_documents({"user_id": user_id, "index_name": nm})
+                    out_list.append({"name": nm, "chunks": int(cnt), "has_emb": True})
+                return {"active": active, "indices": out_list}
+            except Exception:
+                return {"active": active, "indices": []}
+        else:
+            slot = self._ensure_user_slot(user_id)
+            out = {"active": slot.get("active"), "indices": []}
+            for name, meta in slot.get("indices", {}).items():
+                chunks = meta.get("chunks", [])
+                out["indices"].append({
+                    "name": name,
+                    "chunks": len(chunks),
+                    "has_emb": bool(meta.get("emb_path")),
+                })
+            return out
 
     def delete_index(self, user_id: str, index_name: str) -> Dict[str, Any]:
-        slot = self._ensure_user_slot(user_id)
-        existed = index_name in slot["indices"]
-        # Remove from memory
-        if existed:
-            slot["indices"].pop(index_name, None)
-        # Remove from disk
-        idx_dir = self._index_dir(user_id, index_name)
-        removed_disk = False
-        try:
-            if idx_dir.exists():
-                # cautious delete
-                for p in reversed(sorted(idx_dir.rglob("*"))):
+        if self.use_mongo_vector:
+            removed_disk = False
+            try:
+                col = self._col()
+                res = col.delete_many({"user_id": user_id, "index_name": index_name})
+                removed_disk = res.acknowledged
+            except Exception:
+                removed_disk = False
+            slot = self._ensure_user_slot(user_id)
+            if slot.get("active") == index_name:
+                # compute remaining names
+                try:
+                    remaining = self._col().distinct("index_name", {"user_id": user_id})
+                except Exception:
+                    remaining = []
+                slot["active"] = remaining[0] if remaining else None
+            return {"removed_memory": True, "removed_disk": removed_disk, "active": slot.get("active")}
+        else:
+            slot = self._ensure_user_slot(user_id)
+            existed = index_name in slot["indices"]
+            # Remove from memory
+            if existed:
+                slot["indices"].pop(index_name, None)
+            # Remove from disk
+            idx_dir = self._index_dir(user_id, index_name)
+            removed_disk = False
+            try:
+                if idx_dir.exists():
+                    # cautious delete
+                    for p in reversed(sorted(idx_dir.rglob("*"))):
+                        try:
+                            p.unlink()
+                        except Exception:
+                            pass
                     try:
-                        p.unlink()
+                        idx_dir.rmdir()
                     except Exception:
                         pass
+                    # if still exists, try shutil
+                    if idx_dir.exists():
+                        import shutil as _shutil
+                        _shutil.rmtree(idx_dir, ignore_errors=True)
+                    removed_disk = not idx_dir.exists()
+            except Exception:
+                removed_disk = False
+            # Reassign active if needed
+            if slot.get("active") == index_name:
+                remaining = list(slot["indices"].keys())
+                slot["active"] = remaining[0] if remaining else None
                 try:
-                    idx_dir.rmdir()
+                    with (self._user_dir(user_id) / "active.txt").open("w", encoding="utf-8") as f:
+                        f.write(slot["active"] or "")
                 except Exception:
                     pass
-                # if still exists, try shutil
-                if idx_dir.exists():
-                    import shutil as _shutil
-                    _shutil.rmtree(idx_dir, ignore_errors=True)
-                removed_disk = not idx_dir.exists()
-        except Exception:
-            removed_disk = False
-        # Reassign active if needed
-        if slot.get("active") == index_name:
-            remaining = list(slot["indices"].keys())
-            slot["active"] = remaining[0] if remaining else None
-            try:
-                with (self._user_dir(user_id) / "active.txt").open("w", encoding="utf-8") as f:
-                    f.write(slot["active"] or "")
-            except Exception:
-                pass
-        return {"removed_memory": existed, "removed_disk": removed_disk, "active": slot.get("active")}
+            return {"removed_memory": existed, "removed_disk": removed_disk, "active": slot.get("active")}
 
     # --- Build (upload-only) ---
     def build_index_from_folder(
@@ -286,6 +392,7 @@ class RAGService:
                         continue
 
         # chunk (build full-text chunks first)
+        doc_count = len(docs)
         all_chunks: List[Dict[str, Any]] = []
         for p, txt in docs:
             for i, ch in enumerate(split_into_chunks(txt, chunk_size, chunk_overlap)):
@@ -338,9 +445,10 @@ class RAGService:
         if len(all_chunks) > max_chunks:
             all_chunks = all_chunks[:max_chunks]
 
-        # Compute embeddings unless LOW_MEMORY_MODE enabled
+        # Compute embeddings unless LOW_MEMORY_MODE enabled OR mongo without embeddings
         emb = None
         low_mem = os.getenv("LOW_MEMORY_MODE", "1") in ("1", "true", "True")
+        mongo_mode = self.use_mongo_vector
         if all_chunks and not low_mem:
             texts = [c["text"] for c in all_chunks]
             try:
@@ -355,29 +463,54 @@ class RAGService:
                 c["text"] = t[:120]  # retain short preview only
         import gc as _gc
         _gc.collect()
-        # Downcast to float16 to conserve RAM/disk
         if emb is not None:
             emb = emb.astype(np.float16)
         index_name = f"{name_prefix}-{int(time.time())}"
         slot = self._ensure_user_slot(user_id)
-        # Store chunks in memory; embeddings go to disk to avoid RAM usage
-        slot["indices"][index_name] = {"chunks": all_chunks, "emb_path": None}
         slot["active"] = index_name if all_chunks else None
-        # persist to disk for durability (store original full text, not truncated preview)
-        try:
-            emb_path = self._persist_index(user_id, index_name, original_full_chunks, emb)
-            # save path reference so answer() can memmap lazily
-            slot["indices"][index_name]["emb_path"] = str(emb_path) if emb_path else None
-        except Exception:
-            # non-fatal persistence error
-            pass
+
+        if mongo_mode:
+            # Bulk insert into Mongo
+            try:
+                col = self._col()
+                docs_to_insert = []
+                emb_list = emb.tolist() if emb is not None else None
+                for i, c in enumerate(original_full_chunks):
+                    doc = {
+                        "user_id": user_id,
+                        "index_name": index_name,
+                        "chunk_id": c.get("chunk_id"),
+                        "source": c.get("source"),
+                        "text": c.get("text"),
+                    }
+                    if emb_list is not None and i < len(emb_list):
+                        doc["embedding"] = emb_list[i]
+                    docs_to_insert.append(doc)
+                if docs_to_insert:
+                    col.insert_many(docs_to_insert)
+                # store minimal meta in memory
+                slot["indices"][index_name] = {"chunks": [], "emb_path": None, "mongo": True}
+            except Exception:
+                # fallback: treat as empty
+                slot["indices"][index_name] = {"chunks": [], "emb_path": None, "mongo": True, "error": "mongo_insert_failed"}
+        else:
+            # Store chunks in memory; embeddings go to disk to avoid RAM usage
+            slot["indices"][index_name] = {"chunks": all_chunks, "emb_path": None}
+            # persist to disk for durability (store original full text, not truncated preview)
+            try:
+                emb_path = self._persist_index(user_id, index_name, original_full_chunks, emb)
+                # save path reference so answer() can memmap lazily
+                slot["indices"][index_name]["emb_path"] = str(emb_path) if emb_path else None
+            except Exception:
+                # non-fatal persistence error
+                pass
         self.last_build_stats = {
             "backend": "faiss-stub",
             "attempted": len(all_chunks),
             "inserted": len(all_chunks),
             "empty_index": len(all_chunks) == 0,
         }
-        return (len(docs), len(all_chunks), index_name)
+        return (doc_count, len(all_chunks), index_name)
 
     # --- Ask (very naive) ---
     def answer(self, question: str, k: int = 5, user_id: str = "default") -> Dict[str, Any]:
@@ -402,7 +535,65 @@ class RAGService:
                 emb = None
 
         # Try embedding flow first
-        if emb is not None and len(chunks) == emb.shape[0]:
+        mongo_mode = self.use_mongo_vector
+        if mongo_mode:
+            # Mongo-based retrieval
+            try:
+                col = self._col()
+                # Accept both MONGO_VECTOR_INDEX and MONGO_SEARCH_INDEX
+                vector_index = os.getenv("MONGO_VECTOR_INDEX") or os.getenv("MONGO_SEARCH_INDEX") or "embedding_index"
+                k_req = max(1, k)
+                model = self._get_model()
+                # build query vector (hash fallback if model unavailable)
+                if model is not None and os.getenv("USE_EMBEDDINGS", "1") not in ("0", "false", "False"):
+                    qv = model.encode([question], convert_to_numpy=True, normalize_embeddings=True)[0].astype(np.float32).tolist()
+                else:
+                    qv = self._hash_embed([question])[0].astype(np.float32).tolist()
+                try:
+                    top_n = int(os.getenv("TOP_N_CANDIDATES", str(max(10, k_req*5))))
+                except Exception:
+                    top_n = max(10, k_req*5)
+                pipeline = [
+                    {"$vectorSearch": {
+                        "index": vector_index,
+                        "path": "embedding",
+                        "queryVector": qv,
+                        "numCandidates": top_n,
+                        "limit": k_req,
+                        "filter": {"user_id": user_id, "index_name": active},
+                    }},
+                    {"$project": {"text": 1, "source": 1, "chunk_id": 1, "score": {"$meta": "vectorSearchScore"}}},
+                ]
+                results = list(col.aggregate(pipeline))
+                if not results:
+                    # fallback regex/keyword prune
+                    results = list(col.find({"user_id": user_id, "index_name": active}, {"text": 1, "source": 1, "chunk_id": 1}).limit(k_req))
+                # Convert to expected chunk format
+                top = [
+                    {"text": r.get("text", ""), "source": r.get("source"), "chunk_id": r.get("chunk_id", i)}
+                    for i, r in enumerate(results)
+                ]
+            except Exception:
+                # Hard fallback to keyword matching over streaming small batches from Mongo
+                try:
+                    col = self._col()
+                    cursor = col.find({"user_id": user_id, "index_name": active}, {"text": 1, "source": 1, "chunk_id": 1})
+                    q_terms = {t.lower() for t in question.split() if t.strip()}
+                    scored = []
+                    for r in cursor:
+                        txt = r.get("text", "").lower()
+                        score = sum(1 for t in q_terms if t in txt)
+                        if score > 0:
+                            scored.append((score, r))
+                    scored.sort(key=lambda x: x[0], reverse=True)
+                    take = scored[: max(1, k)]
+                    top = [
+                        {"text": r.get("text", ""), "source": r.get("source"), "chunk_id": r.get("chunk_id", i)}
+                        for i, (_s, r) in enumerate(take)
+                    ]
+                except Exception:
+                    top = []
+        elif emb is not None and len(chunks) == emb.shape[0]:
             model = self._get_model()
             if model is not None:
                 try:
@@ -539,17 +730,34 @@ class RAGService:
                 except Exception:
                     pass
 
-        # Extractive synthesis: pick best sentences from (possibly restored) top chunks
-        answer = self._synthesize_answer(question, top)
-        sources = [
-            {
-                "source": ch.get("source"),
-                "chunk_id": ch.get("chunk_id"),
-                "preview": ch.get("text", "")[:120],
-            }
-            for ch in top
-        ]
-        return {"answer": answer, "sources": sources}
+        # Optional LLM re-rank to improve relevance ordering
+        try:
+            if os.getenv("USE_LLM_RERANK", "1") in ("1", "true", "True"):
+                top = self._llm_rerank_chunks(question, top, take=min(k * 2, max(3, len(top))))
+        except Exception:
+            pass
+
+        # LLM synthesis with citations if Groq API available, else extractive
+        use_llm = os.getenv("USE_LLM_ANSWER", "1") in ("1", "true", "True")
+        if use_llm and os.getenv("GROQ_API_KEY"):
+            answer_text, labeled_sources = self._llm_answer_with_citations(question, top, take=k)
+        else:
+            answer_text = self._synthesize_answer(question, top)
+            labeled_sources = None
+
+        sources = []
+        if labeled_sources is not None:
+            sources = labeled_sources
+        else:
+            sources = [
+                {
+                    "source": ch.get("source"),
+                    "chunk_id": ch.get("chunk_id"),
+                    "preview": ch.get("text", "")[:120],
+                }
+                for ch in top[:k]
+            ]
+        return {"answer": answer_text, "sources": sources}
 
     # ---- Simple extractive synthesis to improve readability without LLM ----
     def _synthesize_answer(self, question: str, top_chunks: List[Dict[str, Any]]) -> str:
@@ -587,6 +795,121 @@ class RAGService:
             if sum(len(x) + 1 for x in out_lines) >= max_chars:
                 break
         return " \n".join(out_lines)[:max_chars]
+
+    # ---- LLM helpers (Groq OpenAI-compatible endpoint) ----
+    def _groq_chat(self, messages: List[Dict[str, str]], model: Optional[str] = None, temperature: float = 0.0, max_tokens: int = 800) -> str:
+        import requests
+        api_key = os.getenv("GROQ_API_KEY")
+        if not api_key:
+            return ""
+        endpoint = os.getenv("GROQ_CHAT_ENDPOINT", "https://api.groq.com/openai/v1/chat/completions")
+        mdl = model or os.getenv("GROQ_CHAT_MODEL", os.getenv("GROQ_MODEL_ANSWER", "llama-3.1-8b-instant"))
+        payload = {
+            "model": mdl,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+        try:
+            r = requests.post(endpoint, headers=headers, json=payload, timeout=60)
+            r.raise_for_status()
+            data = r.json()
+            return data.get("choices", [{}])[0].get("message", {}).get("content", "") or ""
+        except Exception:
+            return ""
+
+    def _llm_rerank_chunks(self, question: str, chunks: List[Dict[str, Any]], take: int) -> List[Dict[str, Any]]:
+        # Build a concise list of candidates with labels
+        items = []
+        for i, ch in enumerate(chunks, start=1):
+            txt = (ch.get("text", "") or "")
+            items.append({"label": f"C{i}", "text": txt[:600], "idx": i-1})
+        if not items:
+            return chunks
+        # Ask the LLM to rank and return top labels as JSON array
+        preview = "\n\n".join([f"{it['label']}: {it['text']}" for it in items])
+        sys_msg = (
+            "You are a retrieval reranker. Rank snippets by relevance to the question. "
+            "Return ONLY a JSON array of labels in descending relevance, no extra text."
+        )
+        user_msg = (
+            f"Question: {question}\n\nSnippets:\n{preview}\n\n"
+            f"Respond with JSON array of labels (e.g., [\"C3\",\"C1\"])."
+        )
+        out = self._groq_chat([
+            {"role": "system", "content": sys_msg},
+            {"role": "user", "content": user_msg},
+        ], max_tokens=200)
+        order: List[int] = []
+        if out:
+            try:
+                # Try to extract JSON array
+                import json as _json
+                start = out.find("[")
+                end = out.rfind("]")
+                if start != -1 and end != -1 and end > start:
+                    arr = _json.loads(out[start:end+1])
+                    labels = [str(x) for x in arr if isinstance(x, (str, int))]
+                    label_to_idx = {it["label"]: it["idx"] for it in items}
+                    order = [label_to_idx.get(lb) for lb in labels if label_to_idx.get(lb) is not None]
+            except Exception:
+                order = []
+        if not order:
+            return chunks[:take]
+        dedup = []
+        seen = set()
+        for idx in order:
+            if idx not in seen and 0 <= idx < len(chunks):
+                dedup.append(chunks[idx])
+                seen.add(idx)
+            if len(dedup) >= take:
+                break
+        return dedup or chunks[:take]
+
+    def _llm_answer_with_citations(self, question: str, chunks: List[Dict[str, Any]], take: int = 5) -> Tuple[str, List[Dict[str, Any]]]:
+        # Label top K and construct context
+        chosen = chunks[:take]
+        labeled = []
+        sources: List[Dict[str, Any]] = []
+        # Limit total context size
+        try:
+            max_ctx = int(os.getenv("ANSWER_MAX_CONTEXT_CHARS", "9000"))
+        except Exception:
+            max_ctx = 9000
+        used = 0
+        parts: List[str] = []
+        for i, ch in enumerate(chosen, start=1):
+            label = f"[C{i}]"
+            txt = ch.get("text", "")
+            if not isinstance(txt, str):
+                txt = str(txt)
+            snippet = txt[:1500]
+            block = f"{label} {snippet}"
+            if used + len(block) > max_ctx and parts:
+                break
+            parts.append(block)
+            used += len(block)
+            sources.append({
+                "label": label,
+                "source": ch.get("source"),
+                "chunk_id": ch.get("chunk_id"),
+                "preview": snippet[:160],
+            })
+        context = "\n\n".join(parts)
+        sys_msg = (
+            "You are a precise, factual assistant. Use ONLY the provided context to answer. "
+            "Cite sources inline with their labels like [C1]. If the answer isn't in the context, say you don't know."
+        )
+        user_msg = f"Context:\n{context}\n\nQuestion: {question}\n\nAnswer with citations:"
+        answer = self._groq_chat([
+            {"role": "system", "content": sys_msg},
+            {"role": "user", "content": user_msg},
+        ], temperature=0.0, max_tokens=int(os.getenv("ANSWER_MAX_TOKENS", "800")))
+        # Fallback to extractive if Groq failed
+        if not answer:
+            answer = self._synthesize_answer(question, chosen)
+        return answer, sources
 
 
 # singleton as in original project style

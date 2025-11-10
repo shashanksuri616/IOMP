@@ -14,13 +14,16 @@ type Actions = {
   setLastDebug: (d: any[]) => void
 }
 
-export const useStore = create<State & Actions>((set) => ({
-  apiBase: import.meta.env?.VITE_API_BASE || 'http://localhost:8000',
+export const useStore = create<State & Actions>((set: any) => ({
+  // Use env in all cases; only fall back to localhost during Vite dev
+  apiBase: (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_API_BASE !== undefined)
+    ? (import.meta as any).env.VITE_API_BASE
+    : (typeof import.meta !== 'undefined' && (import.meta as any).env?.DEV ? 'http://localhost:8000' : ''),
   indexName: null,
   mode: null,
   lastDebug: [],
-  setApiBase: (b) => set({ apiBase: b }),
-  setIndexName: (n) => set({ indexName: n }),
-  setMode: (m) => set({ mode: m }),
-  setLastDebug: (d) => set({ lastDebug: d }),
+  setApiBase: (b: string) => set({ apiBase: b }),
+  setIndexName: (n: string | null) => set({ indexName: n }),
+  setMode: (m: State['mode']) => set({ mode: m }),
+  setLastDebug: (d: any[]) => set({ lastDebug: d }),
 }))

@@ -218,8 +218,9 @@
   const webDebugOut = document.getElementById('webDebugOut');
 
     function apiUrl(path) {
-      // Hardcode to local FastAPI for now
-      return 'http://localhost:8000' + (path.startsWith('/') ? path : '/' + path);
+      // Use dynamic base from window.__API_BASE or fallback to relative
+      const base = window.__API_BASE || '';
+      return base.replace(/\/$/, '') + (path.startsWith('/') ? path : '/' + path);
     }
 
   async function uploadAndBuild() {

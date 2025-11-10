@@ -6,11 +6,23 @@ import os
 import json
 from datetime import datetime
 
-# rag_service will be wired in a later commit once hype_rag.py is trimmed.
-try:  # Attempt relative import first
-    from .hype_rag import rag_service  # type: ignore  # noqa: F401
-except Exception:  # pragma: no cover
-    rag_service = None  # placeholder; actual service comes later
+rag_service = None
+_init_error: str | None = None
+try:  # Preferred: package-relative import when started as backend.app
+    from .hype_rag import rag_service as _rs  # type: ignore
+    rag_service = _rs
+except Exception as e1:  # pragma: no cover
+    try:
+        # Fallback: absolute import if working dir adds parent on sys.path
+        from backend.hype_rag import rag_service as _rs2  # type: ignore
+        rag_service = _rs2
+    except Exception as e2:
+        try:
+            # Last resort: construct a fresh instance to keep service usable
+            from backend.hype_rag import RAGService  # type: ignore
+            rag_service = RAGService()
+        except Exception as e3:
+            _init_error = f"import_failed: {e1.__class__.__name__}: {e1}; abs_failed: {e2.__class__.__name__}: {e2}; ctor_failed: {e3.__class__.__name__}: {e3}"
 
 app = FastAPI(title="IOMP Core RAG Service", version="0.1.0")
 
@@ -119,12 +131,14 @@ def ask(req: AskRequest):
 def config():
     try:
         if rag_service is None:
-            return {"initialized": False}
+            return {"initialized": False, "error": _init_error}
         return {
             "initialized": True,
             "use_mongo_vector": bool(getattr(rag_service, "use_mongo_vector", False)),
             "embedding_model": getattr(getattr(rag_service, "embeddings", object()), "model_name", "unknown"),
+            # For per-user we no longer have a global active_index_name; expose summary instead
             "active_index_name": getattr(rag_service, "active_index_name", None),
+            "multi_tenant": hasattr(rag_service, "_indices_by_user"),
         }
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))

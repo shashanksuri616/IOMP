@@ -10,7 +10,7 @@ Notes for readers:
 
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
 import os
 import time
 import os
@@ -64,15 +64,17 @@ class RAGService:
         p.mkdir(parents=True, exist_ok=True)
         return p
 
-    def _persist_index(self, user_id: str, index_name: str, chunks: List[Dict[str, Any]], emb: np.ndarray | None) -> None:
+    def _persist_index(self, user_id: str, index_name: str, chunks: List[Dict[str, Any]], emb: Optional[np.ndarray]) -> Optional[Path]:
         idx_dir = self._index_dir(user_id, index_name)
         # chunks.jsonl
         with (idx_dir / "chunks.jsonl").open("w", encoding="utf-8") as f:
             for ch in chunks:
                 f.write(json.dumps(ch, ensure_ascii=False) + "\n")
         # embedding matrix
+        emb_path: Optional[Path] = None
         if emb is not None:
-            np.save(idx_dir / "emb.npy", emb)
+            emb_path = idx_dir / "emb.npy"
+            np.save(emb_path, emb)
         # metadata
         meta = {
             "model": self.embeddings.model_name,
@@ -86,6 +88,7 @@ class RAGService:
         # mark active
         with (self._user_dir(user_id) / "active.txt").open("w", encoding="utf-8") as f:
             f.write(index_name)
+        return emb_path
 
     def _load_from_disk(self) -> None:
         base = self._data_dir() / "indices"
@@ -123,13 +126,11 @@ class RAGService:
                 except Exception:
                     continue
                 emb_path = idx_dir / "emb.npy"
-                emb = None
+                # Do NOT load embeddings into RAM on boot; store path only
                 if emb_path.exists():
-                    try:
-                        emb = np.load(emb_path)
-                    except Exception:
-                        emb = None
-                slot["indices"][name] = {"chunks": chunks, "emb": emb}
+                    slot["indices"][name] = {"chunks": chunks, "emb_path": str(emb_path)}
+                else:
+                    slot["indices"][name] = {"chunks": chunks, "emb_path": None}
             slot["active"] = active
 
     def _get_model(self):
@@ -191,13 +192,22 @@ class RAGService:
                     "chunk_id": i,
                 })
 
+        # Optional cap to keep memory within limits
+        try:
+            max_chunks = int(os.getenv("MAX_CHUNKS_PER_INDEX", "20000"))
+        except Exception:
+            max_chunks = 20000
+        if len(all_chunks) > max_chunks:
+            all_chunks = all_chunks[:max_chunks]
+
         # Compute embeddings if model available
         emb = None
         model = self._get_model()
         if model is not None and all_chunks:
             try:
                 texts = [c["text"] for c in all_chunks]
-                emb = model.encode(texts, batch_size=32, convert_to_numpy=True, normalize_embeddings=True)
+                bsz = int(os.getenv("EMB_BATCH", os.getenv("EMB_RETRIEVAL_BATCH", "32")))
+                emb = model.encode(texts, batch_size=bsz, convert_to_numpy=True, normalize_embeddings=True)
             except Exception:
                 emb = None
                 # smaller batch to reduce memory; configurable via EMB_BATCH
@@ -212,16 +222,21 @@ class RAGService:
                     vecs.append(part)
                 emb = np.vstack(vecs) if vecs else None
                 # Downcast to float16 to conserve RAM/disk
-                if emb is not None:
-                    emb = emb.astype(np.float16)
+        # Downcast to float16 to conserve RAM/disk
+        if emb is not None:
+            emb = emb.astype(np.float16)
         index_name = f"{name_prefix}-{int(time.time())}"
         slot = self._ensure_user_slot(user_id)
-        slot["indices"][index_name] = {"chunks": all_chunks, "emb": emb}
+        # Store chunks in memory; embeddings go to disk to avoid RAM usage
+        slot["indices"][index_name] = {"chunks": all_chunks, "emb_path": None}
         slot["active"] = index_name if all_chunks else None
         # persist to disk for durability
-        slot["indices"][index_name] = {"chunks": all_chunks, "emb_path": None}
-            self._persist_index(user_id, index_name, all_chunks, emb)
+        try:
+            emb_path = self._persist_index(user_id, index_name, all_chunks, emb)
+            # save path reference so answer() can memmap lazily
+            slot["indices"][index_name]["emb_path"] = str(emb_path) if emb_path else None
         except Exception:
+            # non-fatal persistence error
             pass
         self.last_build_stats = {
             "backend": "faiss-stub",
@@ -233,11 +248,11 @@ class RAGService:
 
     # --- Ask (very naive) ---
     def answer(self, question: str, k: int = 5, user_id: str = "default") -> Dict[str, Any]:
-        """Extremely simple baseline: keyword match over chunks.
-        This will be replaced/augmented in later commits.
+        """Answer using embedding similarity with memory-safe scanning, MMR, and extractive synthesis.
+        Falls back to keyword matching when embeddings are unavailable.
         """
         slot = self._ensure_user_slot(user_id)
-        return (len(docs), len(all_chunks), index_name)
+        active = slot.get("active")
         if not active:
             return {"answer": "", "sources": [], "error": "No active index (empty or not built). Upload a supported file: .txt .md .csv .pdf"}
         idx = slot["indices"].get(active)
@@ -252,16 +267,68 @@ class RAGService:
             except Exception:
                 emb = None
 
+        # Try embedding flow first
         if emb is not None and len(chunks) == emb.shape[0]:
-            # Embedding-based cosine similarity
             model = self._get_model()
-            try:
-                qv = model.encode([question], convert_to_numpy=True, normalize_embeddings=True)[0].astype(np.float16)
-                # scores = emb @ qv
-                scores = np.dot(emb, qv)
-                top_idx = np.argsort(-scores)[: max(1, k)]
-                top = [chunks[int(i)] for i in top_idx]
-            except Exception:
+            if model is not None:
+                try:
+                    qv = model.encode([question], convert_to_numpy=True, normalize_embeddings=True)[0].astype(np.float16)
+                    # Streamed dot-product to constrain RAM
+                    try:
+                        block = int(os.getenv("RETRIEVAL_BLOCK", "4096"))
+                    except Exception:
+                        block = 4096
+                    scores_list: List[np.ndarray] = []
+                    n = emb.shape[0]
+                    for i in range(0, n, block):
+                        blk = emb[i:i+block]
+                        scores_list.append(np.dot(blk, qv))
+                    scores = np.concatenate(scores_list) if scores_list else np.empty((0,), dtype=np.float32)
+
+                    # Candidate pruning
+                    try:
+                        top_n = int(os.getenv("TOP_N_CANDIDATES", str(max(20, k*8))))
+                    except Exception:
+                        top_n = max(20, k*8)
+                    cand_idx = np.argsort(-scores)[: max(k, top_n)]
+
+                    # Optional MMR diversification
+                    mmr_enabled = os.getenv("MMR_ENABLED", "0") in ("1", "true", "True")
+                    if mmr_enabled:
+                        try:
+                            lam = float(os.getenv("MMR_LAMBDA", "0.5"))
+                        except Exception:
+                            lam = 0.5
+                        selected: List[int] = []
+                        cand = cand_idx.tolist()
+                        # Precompute normalized reps for similarity among candidates if needed
+                        # emb already normalized; use dot for cosine
+                        for _ in range(min(k, len(cand))):
+                            best_j = None
+                            best_score = -1e9
+                            for j in cand:
+                                rel = scores[j]
+                                div = 0.0
+                                if selected:
+                                    # max similarity to already selected
+                                    sims = [float(np.dot(emb[j], emb[s])) for s in selected]
+                                    div = max(sims) if sims else 0.0
+                                mmr = lam * float(rel) - (1.0 - lam) * div
+                                if mmr > best_score:
+                                    best_score = mmr
+                                    best_j = j
+                            if best_j is None:
+                                break
+                            selected.append(best_j)
+                            cand.remove(best_j)
+                        top_idx = np.array(selected, dtype=int)
+                    else:
+                        top_idx = cand_idx[:k]
+
+                    top = [chunks[int(i)] for i in top_idx]
+                except Exception:
+                    top = chunks[: max(1, k)]
+            else:
                 top = chunks[: max(1, k)]
         else:
             # Fallback keyword matching
@@ -274,8 +341,8 @@ class RAGService:
             scored.sort(key=lambda x: x[0], reverse=True)
             top = [c for _s, c in scored[: max(1, k)]]
 
-        # naive "answer": concatenate top snippets
-        answer = "\n\n".join(ch.get("text", "")[:300] for ch in top)
+        # Extractive synthesis: pick best sentences from top chunks
+        answer = self._synthesize_answer(question, top)
         sources = [
             {
                 "source": ch.get("source"),
@@ -285,6 +352,43 @@ class RAGService:
             for ch in top
         ]
         return {"answer": answer, "sources": sources}
+
+    # ---- Simple extractive synthesis to improve readability without LLM ----
+    def _synthesize_answer(self, question: str, top_chunks: List[Dict[str, Any]]) -> str:
+        try:
+            max_chars = int(os.getenv("ANSWER_MAX_CHARS", "1200"))
+        except Exception:
+            max_chars = 1200
+        q_terms = [t.lower() for t in question.split() if t.strip()]
+        sentences: List[Tuple[float, str]] = []
+        for ch in top_chunks:
+            text = ch.get("text", "")
+            # naive sentence split
+            for sent in text.split(". "):
+                s_clean = sent.strip()
+                if not s_clean:
+                    continue
+                s_low = s_clean.lower()
+                # score by term overlap and length penalty
+                overlap = sum(1 for t in q_terms if t in s_low)
+                score = overlap - 0.001 * max(0, len(s_clean) - 300)
+                if overlap > 0:
+                    sentences.append((score, s_clean))
+        if not sentences:
+            # fallback: join first lines of chunks
+            raw = "\n\n".join(ch.get("text", "")[:300] for ch in top_chunks)
+            return raw[:max_chars]
+        sentences.sort(key=lambda x: x[0], reverse=True)
+        out_lines: List[str] = []
+        used: set[str] = set()
+        for _score, s in sentences:
+            if s in used:
+                continue
+            used.add(s)
+            out_lines.append(s if s.endswith('.') else s + '.')
+            if sum(len(x) + 1 for x in out_lines) >= max_chars:
+                break
+        return " \n".join(out_lines)[:max_chars]
 
 
 # singleton as in original project style

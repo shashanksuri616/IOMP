@@ -242,6 +242,39 @@ class RAGService:
                     "source": p.replace("\\", "/"),
                     "chunk_id": i,
                 })
+        # Release original docs list early to free memory
+        docs = []  # type: ignore
+
+        # Aggressive memory trimming / truncation controls
+        try:
+            trunc_chars = int(os.getenv("TRUNCATE_CHUNK_CHARS", "600"))
+        except Exception:
+            trunc_chars = 600
+        if trunc_chars > 0:
+            for c in all_chunks:
+                txt = c.get("text", "")
+                if len(txt) > trunc_chars:
+                    c["text"] = txt[:trunc_chars]
+
+        # Total text bytes cap (approx) to avoid huge RAM usage
+        try:
+            max_total_bytes = int(os.getenv("MAX_TOTAL_TEXT_BYTES", "8000000"))  # ~8MB default
+        except Exception:
+            max_total_bytes = 8000000
+        running = 0
+        if max_total_bytes > 0:
+            trimmed: List[Dict[str, Any]] = []
+            for c in all_chunks:
+                t = c.get("text", "")
+                running += len(t)
+                if running > max_total_bytes:
+                    break
+                trimmed.append(c)
+            if len(trimmed) < len(all_chunks):
+                all_chunks = trimmed
+
+        # Optional: drop full texts after embeddings to keep only previews
+        drop_full = os.getenv("DROP_FULL_CHUNKS", "1") in ("1", "true", "True")
 
         # Optional cap to keep memory within limits
         try:
@@ -260,6 +293,13 @@ class RAGService:
             except Exception:
                 bsz = 32
             emb = self._encode_texts(texts, batch_size=bsz)
+        # Optionally drop full text (keep only preview) after embeddings to reduce memory footprint
+        if drop_full:
+            for c in all_chunks:
+                t = c.get("text", "")
+                c["text"] = t[:120]  # retain short preview only
+        import gc as _gc
+        _gc.collect()
         # Downcast to float16 to conserve RAM/disk
         if emb is not None:
             emb = emb.astype(np.float16)

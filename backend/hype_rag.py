@@ -43,6 +43,25 @@ class RAGService:
             # non-fatal; continue with empty in-memory state
             pass
 
+    # ---- HF cache prep to avoid permission errors (e.g., '/app' not writable) ----
+    def _hf_cache_dir(self) -> Path:
+        p = self._data_dir() / "hf"
+        p.mkdir(parents=True, exist_ok=True)
+        return p
+
+    def _prepare_hf_cache_env(self) -> None:
+        cache_dir = str(self._hf_cache_dir())
+        for k in [
+            "HF_HOME",
+            "HF_HUB_CACHE",
+            "HUGGINGFACE_HUB_CACHE",
+            "HF_DATASETS_CACHE",
+            "TRANSFORMERS_CACHE",
+            "SENTENCE_TRANSFORMERS_HOME",
+            "TORCH_HOME",
+        ]:
+            os.environ[k] = os.getenv(k, cache_dir)
+
     # ---- Persistence helpers ----
     def _data_dir(self) -> Path:
         base = os.getenv("DATA_DIR")
@@ -141,15 +160,47 @@ class RAGService:
                     self._model = None
                     return None
                 model_name = os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
-                # Honor cache dirs to reduce memory thrash on small instances
-                for k in ["HF_HOME", "TRANSFORMERS_CACHE", "SENTENCE_TRANSFORMERS_HOME"]:
-                    os.environ.setdefault(k, os.getenv(k, "/app/data/hf"))
+                # Ensure writable HF cache before model init
+                self._prepare_hf_cache_env()
                 self._model = SentenceTransformer(model_name)
                 self.embeddings.model_name = model_name
             except Exception:
                 # fallback: no model, keep None; we'll degrade to keyword matching
                 self._model = None
         return self._model
+
+    # ---- Lightweight hash embeddings fallback when ST model unavailable ----
+    def _hash_embed(self, texts: List[str], dim: int = 384) -> np.ndarray:
+        import hashlib
+        mat = np.zeros((len(texts), dim), dtype=np.float32)
+        for i, t in enumerate(texts):
+            s = t.lower()
+            # word tokens
+            for tok in s.split():
+                h = int(hashlib.blake2b(tok.encode("utf-8"), digest_size=8).hexdigest(), 16)
+                mat[i, h % dim] += 1.0
+            # char bigrams
+            for j in range(len(s) - 1):
+                bg = s[j:j+2]
+                h = int(hashlib.blake2b(bg.encode("utf-8"), digest_size=8).hexdigest(), 16)
+                mat[i, h % dim] += 0.2
+        # L2 normalize
+        norms = np.linalg.norm(mat, axis=1, keepdims=True) + 1e-8
+        mat = mat / norms
+        return mat.astype(np.float16)
+
+    def _encode_texts(self, texts: List[str], batch_size: int = 32) -> np.ndarray:
+        model = self._get_model()
+        if model is None:
+            # fallback hashing
+            self.embeddings.model_name = "hash-embeddings"
+            return self._hash_embed(texts)
+        try:
+            return model.encode(texts, batch_size=batch_size, convert_to_numpy=True, normalize_embeddings=True).astype(np.float16)
+        except Exception:
+            # as last resort, use hashing
+            self.embeddings.model_name = "hash-embeddings"
+            return self._hash_embed(texts)
 
     def _ensure_user_slot(self, user_id: str) -> Dict[str, Any]:
         if user_id not in self._indices_by_user:
@@ -200,28 +251,15 @@ class RAGService:
         if len(all_chunks) > max_chunks:
             all_chunks = all_chunks[:max_chunks]
 
-        # Compute embeddings if model available
+        # Compute embeddings (with fallback and batching)
         emb = None
-        model = self._get_model()
-        if model is not None and all_chunks:
+        if all_chunks:
+            texts = [c["text"] for c in all_chunks]
             try:
-                texts = [c["text"] for c in all_chunks]
                 bsz = int(os.getenv("EMB_BATCH", os.getenv("EMB_RETRIEVAL_BATCH", "32")))
-                emb = model.encode(texts, batch_size=bsz, convert_to_numpy=True, normalize_embeddings=True)
             except Exception:
-                emb = None
-                # smaller batch to reduce memory; configurable via EMB_BATCH
-                try:
-                    bsz = int(os.getenv("EMB_BATCH", "8"))
-                except Exception:
-                    bsz = 8
-                # Encode in batches to limit peak memory
-                vecs: List[np.ndarray] = []
-                for i in range(0, len(texts), bsz):
-                    part = model.encode(texts[i:i+bsz], batch_size=bsz, convert_to_numpy=True, normalize_embeddings=True)
-                    vecs.append(part)
-                emb = np.vstack(vecs) if vecs else None
-                # Downcast to float16 to conserve RAM/disk
+                bsz = 32
+            emb = self._encode_texts(texts, batch_size=bsz)
         # Downcast to float16 to conserve RAM/disk
         if emb is not None:
             emb = emb.astype(np.float16)
@@ -329,7 +367,24 @@ class RAGService:
                 except Exception:
                     top = chunks[: max(1, k)]
             else:
-                top = chunks[: max(1, k)]
+                # fallback: use hash embedding for query and do dot-product
+                qv = self._hash_embed([question])[0]
+                try:
+                    block = int(os.getenv("RETRIEVAL_BLOCK", "4096"))
+                except Exception:
+                    block = 4096
+                scores_list: List[np.ndarray] = []
+                n = emb.shape[0]
+                for i in range(0, n, block):
+                    blk = emb[i:i+block]
+                    scores_list.append(np.dot(blk, qv))
+                scores = np.concatenate(scores_list) if scores_list else np.empty((0,), dtype=np.float32)
+                try:
+                    top_n = int(os.getenv("TOP_N_CANDIDATES", str(max(20, k*8))))
+                except Exception:
+                    top_n = max(20, k*8)
+                top_idx = np.argsort(-scores)[: max(k, top_n)][:k]
+                top = [chunks[int(i)] for i in top_idx]
         else:
             # Fallback keyword matching
             q_terms = {t.lower() for t in question.split() if t.strip()}

@@ -233,7 +233,7 @@ class RAGService:
                         # skip unreadable files
                         continue
 
-        # chunk
+        # chunk (build full-text chunks first)
         all_chunks: List[Dict[str, Any]] = []
         for p, txt in docs:
             for i, ch in enumerate(split_into_chunks(txt, chunk_size, chunk_overlap)):
@@ -242,6 +242,8 @@ class RAGService:
                     "source": p.replace("\\", "/"),
                     "chunk_id": i,
                 })
+        # Keep a deep copy of full chunks (for disk persistence and optional later restoration)
+        original_full_chunks: List[Dict[str, Any]] = [dict(c) for c in all_chunks]
         # Release original docs list early to free memory
         docs = []  # type: ignore
 
@@ -308,9 +310,9 @@ class RAGService:
         # Store chunks in memory; embeddings go to disk to avoid RAM usage
         slot["indices"][index_name] = {"chunks": all_chunks, "emb_path": None}
         slot["active"] = index_name if all_chunks else None
-        # persist to disk for durability
+        # persist to disk for durability (store original full text, not truncated preview)
         try:
-            emb_path = self._persist_index(user_id, index_name, all_chunks, emb)
+            emb_path = self._persist_index(user_id, index_name, original_full_chunks, emb)
             # save path reference so answer() can memmap lazily
             slot["indices"][index_name]["emb_path"] = str(emb_path) if emb_path else None
         except Exception:
@@ -436,7 +438,35 @@ class RAGService:
             scored.sort(key=lambda x: x[0], reverse=True)
             top = [c for _s, c in scored[: max(1, k)]]
 
-        # Extractive synthesis: pick best sentences from top chunks
+        # Optional restore of full texts for answer synthesis if only previews kept
+        restore_full = os.getenv("RESTORE_FULL_ON_ANSWER", "1") in ("1", "true", "True")
+        if restore_full:
+            # If current chunk text looks truncated (heuristic: length < 200 and DROP_FULL_CHUNKS enabled), reload originals from disk
+            drop_full = os.getenv("DROP_FULL_CHUNKS", "1") in ("1", "true", "True")
+            if drop_full:
+                try:
+                    # Load full chunk texts from persisted file
+                    index_dir = Path(self._user_dir(user_id)) / active
+                    chunks_path = index_dir / "chunks.jsonl"
+                    if chunks_path.exists():
+                        full_map: Dict[int, str] = {}
+                        with chunks_path.open("r", encoding="utf-8") as f:
+                            for line in f:
+                                try:
+                                    obj = json.loads(line)
+                                    cid = obj.get("chunk_id")
+                                    if isinstance(cid, int):
+                                        full_map[cid] = obj.get("text", "")
+                                except Exception:
+                                    continue
+                        for ch in top:
+                            cid = ch.get("chunk_id")
+                            if isinstance(cid, int) and cid in full_map:
+                                ch["text"] = full_map[cid]
+                except Exception:
+                    pass
+
+        # Extractive synthesis: pick best sentences from (possibly restored) top chunks
         answer = self._synthesize_answer(question, top)
         sources = [
             {

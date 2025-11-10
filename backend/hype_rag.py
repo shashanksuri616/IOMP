@@ -46,7 +46,7 @@ class RAGService:
         for root, _dirs, files in os.walk(folder_path):
             for fn in files:
                 ext = os.path.splitext(fn.lower())[1]
-                if ext in (".txt", ".md", ".csv"):
+                if ext in (".txt", ".md", ".csv", ".pdf"):
                     p = os.path.join(root, fn)
                     try:
                         txt = read_text_from_file(p)
@@ -68,11 +68,12 @@ class RAGService:
 
         index_name = f"{name_prefix}-{int(time.time())}"
         self._indices[index_name] = all_chunks
-        self.active_index_name = index_name
+        self.active_index_name = index_name if all_chunks else None
         self.last_build_stats = {
             "backend": "faiss-stub",
             "attempted": len(all_chunks),
             "inserted": len(all_chunks),
+            "empty_index": len(all_chunks) == 0,
         }
         return (len(docs), len(all_chunks), index_name)
 
@@ -82,7 +83,7 @@ class RAGService:
         This will be replaced/augmented in later commits.
         """
         if not self.active_index_name:
-            return {"answer": "", "sources": [], "error": "No active index. Upload first."}
+            return {"answer": "", "sources": [], "error": "No active index (empty or not built). Upload a supported file: .txt .md .csv .pdf"}
         chunks = self._indices.get(self.active_index_name, [])
         if not chunks:
             return {"answer": "", "sources": [], "error": "Index is empty."}
@@ -112,27 +113,10 @@ class RAGService:
 # singleton as in original project style
 rag = RAGService()
 rag_service = rag  # keep the same name used by app.py
-# Copied from service/hype_rag.py for IOMP core.
-# NOTE: This file intentionally retains only the functionality required for
-# folder ingestion and Q&A. Web build utilities remain present but are unused
-# by IOMP's trimmed API (app.py exposes only /upload and /ask).
 
-from pathlib import Path
-
-# We import the original module and re-export its RAGService and singleton
-# to minimize divergence during the initial split. If you prefer a hard copy,
-# replace this shim with the full class body from service/hype_rag.py.
-try:
-    from service.hype_rag import RAGService as _RAGService  # type: ignore
-    from service.hype_rag import rag_service as _rag_service  # type: ignore
-except Exception:
-    # If relative import fails (running inside IOMP only), fall back to
-    # bundling the necessary code by raising a clear error message.
-    raise ImportError(
-        "IOMP/backend/hype_rag.py is a shim over service/hype_rag.py. "
-        "Copy the full class here or install the original module on PYTHONPATH."
-    )
-
-# Re-export for app.py consumers
-RAGService = _RAGService
-rag_service = _rag_service
+# NOTE: Simplified: removed external dependency on service.hype_rag so this
+# module is self-contained. The earlier version attempted to import the full
+# implementation; that caused initialization failures in hosted environments
+# where the parent 'service' package was absent. Now we always use the minimal
+# built-in RAGService above. If you later want a richer implementation, replace
+# the class definition rather than importing externally.

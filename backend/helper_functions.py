@@ -5,8 +5,33 @@ Later commits may add embedding calls, improved cleaning, and format-specific pa
 """
 from __future__ import annotations
 from typing import List
+import os
+
+def _read_pdf(path: str) -> str:
+    try:
+        from PyPDF2 import PdfReader  # lightweight and widely available
+    except Exception:
+        # Dependency missing or import error; return empty to skip silently
+        return ""
+    try:
+        reader = PdfReader(path)
+        parts: List[str] = []
+        for page in reader.pages:
+            try:
+                txt = page.extract_text() or ""
+            except Exception:
+                txt = ""
+            if txt:
+                parts.append(txt)
+        return "\n".join(parts)
+    except Exception:
+        return ""
 
 def read_text_from_file(path: str) -> str:
+    ext = os.path.splitext(path.lower())[1]
+    if ext == ".pdf":
+        return _read_pdf(path)
+    # Default text read for txt/md/csv and other plaintext
     with open(path, "r", encoding="utf-8", errors="ignore") as f:
         return f.read()
 

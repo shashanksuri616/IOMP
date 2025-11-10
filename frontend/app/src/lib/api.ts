@@ -27,6 +27,21 @@ export const schemas = {
   })
 }
 
+function getUserId(): string {
+  try {
+    const KEY = 'iomp_user_id'
+    let v = localStorage.getItem(KEY)
+    if (v) return v
+    const r = (typeof crypto !== 'undefined' && crypto.getRandomValues)
+      ? Array.from(crypto.getRandomValues(new Uint8Array(8))).map(b => b.toString(16).padStart(2, '0')).join('')
+      : String(Date.now())
+    localStorage.setItem(KEY, r)
+    return r
+  } catch {
+    return 'default'
+  }
+}
+
 async function req<T>(path: string, init?: RequestInit) {
   const res = await fetch(`${API_BASE}${path}`, init)
   const data = await res.json().catch(() => ({}))
@@ -40,10 +55,11 @@ export const api = {
     .then(d => schemas.webBuildResp.parse(d)),
   webBuildUrls: (body: any) => req(`/web_build_urls`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
     .then(d => schemas.webBuildResp.parse(d)),
-  ask: (question: string, k: number) => req(`/ask`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ question, k }) })
+  ask: (question: string, k: number) => req(`/ask`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ question, k, user_id: getUserId() }) })
     .then(d => schemas.askResp.parse(d)),
   upload: (files: File[]) => {
     const fd = new FormData()
+    fd.append('user_id', getUserId())
     files.forEach(f => fd.append('files', f))
     return req(`/upload`, { method: 'POST', body: fd })
   }

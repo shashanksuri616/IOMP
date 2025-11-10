@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, UploadFile, File
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List
@@ -37,6 +37,7 @@ def health():
 class AskRequest(BaseModel):
     question: str
     k: int = 5
+    user_id: str = "default"
 
 
 def _project_root() -> str:
@@ -63,7 +64,12 @@ def _log_event(event: str, data: dict) -> None:
 
 
 @app.post("/upload")
-def upload_files(chunk_size: int = 1000, chunk_overlap: int = 200, files: List[UploadFile] = File(...)):
+def upload_files(
+    user_id: str = Form("default"),
+    chunk_size: int = Form(1000),
+    chunk_overlap: int = Form(200),
+    files: List[UploadFile] = File(...),
+):
     """Accept one or more files, save to a temp folder, and build an index from them."""
     if rag_service is None:
         raise HTTPException(status_code=500, detail="rag_service not initialized")
@@ -77,7 +83,7 @@ def upload_files(chunk_size: int = 1000, chunk_overlap: int = 200, files: List[U
                     shutil.copyfileobj(f.file, out)
                 names.append(f.filename)
             docs, chunks, index_name = rag_service.build_index_from_folder(
-                tmpdir, chunk_size, chunk_overlap, name_prefix="upload"
+                tmpdir, chunk_size, chunk_overlap, name_prefix="upload", user_id=user_id
             )
             payload = {
                 "status": "built",
@@ -98,7 +104,7 @@ def ask(req: AskRequest):
     if rag_service is None:
         raise HTTPException(status_code=500, detail="rag_service not initialized")
     try:
-        result = rag_service.answer(req.question, req.k)
+    result = rag_service.answer(req.question, req.k, user_id=req.user_id)
         short = result.copy()
         ans = short.get("answer", "")
         if isinstance(ans, str) and len(ans) > 2000:

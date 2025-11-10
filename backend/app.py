@@ -104,7 +104,7 @@ def ask(req: AskRequest):
     if rag_service is None:
         raise HTTPException(status_code=500, detail="rag_service not initialized")
     try:
-    result = rag_service.answer(req.question, req.k, user_id=req.user_id)
+        result = rag_service.answer(req.question, req.k, user_id=req.user_id)
         short = result.copy()
         ans = short.get("answer", "")
         if isinstance(ans, str) and len(ans) > 2000:

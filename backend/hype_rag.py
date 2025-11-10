@@ -136,7 +136,13 @@ class RAGService:
         if self._model is None:
             try:
                 from sentence_transformers import SentenceTransformer
+                if os.getenv("USE_EMBEDDINGS", "1") in ("0", "false", "False"):
+                    self._model = None
+                    return None
                 model_name = os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
+                # Honor cache dirs to reduce memory thrash on small instances
+                for k in ["HF_HOME", "TRANSFORMERS_CACHE", "SENTENCE_TRANSFORMERS_HOME"]:
+                    os.environ.setdefault(k, os.getenv(k, "/app/data/hf"))
                 self._model = SentenceTransformer(model_name)
                 self.embeddings.model_name = model_name
             except Exception:
@@ -194,13 +200,26 @@ class RAGService:
                 emb = model.encode(texts, batch_size=32, convert_to_numpy=True, normalize_embeddings=True)
             except Exception:
                 emb = None
-
+                # smaller batch to reduce memory; configurable via EMB_BATCH
+                try:
+                    bsz = int(os.getenv("EMB_BATCH", "8"))
+                except Exception:
+                    bsz = 8
+                # Encode in batches to limit peak memory
+                vecs: List[np.ndarray] = []
+                for i in range(0, len(texts), bsz):
+                    part = model.encode(texts[i:i+bsz], batch_size=bsz, convert_to_numpy=True, normalize_embeddings=True)
+                    vecs.append(part)
+                emb = np.vstack(vecs) if vecs else None
+                # Downcast to float16 to conserve RAM/disk
+                if emb is not None:
+                    emb = emb.astype(np.float16)
         index_name = f"{name_prefix}-{int(time.time())}"
         slot = self._ensure_user_slot(user_id)
         slot["indices"][index_name] = {"chunks": all_chunks, "emb": emb}
         slot["active"] = index_name if all_chunks else None
         # persist to disk for durability
-        try:
+        slot["indices"][index_name] = {"chunks": all_chunks, "emb_path": None}
             self._persist_index(user_id, index_name, all_chunks, emb)
         except Exception:
             pass
@@ -218,20 +237,26 @@ class RAGService:
         This will be replaced/augmented in later commits.
         """
         slot = self._ensure_user_slot(user_id)
-        active = slot.get("active")
+        return (len(docs), len(all_chunks), index_name)
         if not active:
             return {"answer": "", "sources": [], "error": "No active index (empty or not built). Upload a supported file: .txt .md .csv .pdf"}
         idx = slot["indices"].get(active)
         if not idx:
             return {"answer": "", "sources": [], "error": "Index is empty."}
         chunks = idx["chunks"]
-        emb = idx.get("emb")
+        emb = None
+        emb_path = idx.get("emb_path")
+        if emb_path:
+            try:
+                emb = np.load(emb_path, mmap_mode="r")  # memory-map; minimal RAM
+            except Exception:
+                emb = None
 
         if emb is not None and len(chunks) == emb.shape[0]:
             # Embedding-based cosine similarity
             model = self._get_model()
             try:
-                qv = model.encode([question], convert_to_numpy=True, normalize_embeddings=True)[0]
+                qv = model.encode([question], convert_to_numpy=True, normalize_embeddings=True)[0].astype(np.float16)
                 # scores = emb @ qv
                 scores = np.dot(emb, qv)
                 top_idx = np.argsort(-scores)[: max(1, k)]

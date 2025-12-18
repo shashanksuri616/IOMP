@@ -1,0 +1,54 @@
+.pixel-canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+}
+
+.pixel-card {
+  height: 400px;
+  width: 300px;
+  position: relative;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  aspect-ratio: 4 / 5;
+  border: 1px solid #27272a;
+  border-radius: 25px;
+  isolation: isolate;
+  transition: border-color 200ms cubic-bezier(0.5, 1, 0.89, 1);
+  user-select: none;
+}
+
+/* Size modifier for smaller cards */
+.pixel-card.pixel-small {
+  width: 240px;
+  height: 320px;
+}
+
+.pixel-card::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  aspect-ratio: 1;
+  background: radial-gradient(circle, #09090b, transparent 85%);
+  opacity: 0;
+  transition: opacity 800ms cubic-bezier(0.5, 1, 0.89, 1);
+  z-index: 1;
+  pointer-events: none;
+}
+
+.pixel-card:hover::before,
+.pixel-card:focus-within::before {
+  opacity: 1;
+}
+
+/* Ensure content sits above canvas and glow */
+.pixel-card > *:not(.pixel-canvas) {
+  position: relative;
+  z-index: 2;
+}

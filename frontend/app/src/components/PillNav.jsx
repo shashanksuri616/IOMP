@@ -16,7 +16,8 @@ const PillNav = ({
   pillTextColor,
   onMobileMenuClick,
   initialLoadAnimation = true,
-  logoHref
+  logoHref,
+  homeFabScrollToTop = false
 }) => {
   const resolvedPillTextColor = pillTextColor ?? baseColor;
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
@@ -257,16 +258,44 @@ const PillNav = ({
 
   return (
     <>
-      {/* Floating Home button when nav is hidden */}
+      {/* Floating Home button with symbol when nav is hidden */}
       {hidden && (
-        isRouterLink(targetLogoHref) ? (
-          <Link to={targetLogoHref} className="pill-home-fab" aria-label="Home">
-            <img src={logo} alt="Home" />
-          </Link>
-        ) : (
-          <a href={targetLogoHref} className="pill-home-fab" aria-label="Home">
-            <img src={logo} alt="Home" />
+        homeFabScrollToTop ? (
+          <a
+            href="#"
+            className="pill-home-fab"
+            aria-label="Scroll to top"
+            onClick={e => {
+              e.preventDefault();
+              try {
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+              } catch {}
+            }}
+          >
+            <svg className="pill-home-icon" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M3 10.5L12 3l9 7.5" />
+              <path d="M5 10v10h14V10" />
+              <path d="M9 20V12h6v8" />
+            </svg>
           </a>
+        ) : (
+          isRouterLink(targetLogoHref) ? (
+            <Link to={targetLogoHref} className="pill-home-fab" aria-label="Home">
+              <svg className="pill-home-icon" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M3 10.5L12 3l9 7.5" />
+                <path d="M5 10v10h14V10" />
+                <path d="M9 20V12h6v8" />
+              </svg>
+            </Link>
+          ) : (
+            <a href={targetLogoHref} className="pill-home-fab" aria-label="Home">
+              <svg className="pill-home-icon" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M3 10.5L12 3l9 7.5" />
+                <path d="M5 10v10h14V10" />
+                <path d="M9 20V12h6v8" />
+              </svg>
+            </a>
+          )
         )
       )}
 

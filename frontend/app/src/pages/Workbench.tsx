@@ -25,8 +25,8 @@ export default function Workbench() {
         logoAlt="Home"
         logoHref="/"
         items={[
-          { label: 'How it works', href: '/#learn' },
-          { label: 'Docs', href: '/#docs' },
+          { label: 'Features', href: '/#learn' },
+          { label: 'HOW IT WORKS', href: '/docs' },
           { label: 'Try now', href: '/app', ariaLabel: 'Open Workbench' }
         ]}
         activeHref={undefined}

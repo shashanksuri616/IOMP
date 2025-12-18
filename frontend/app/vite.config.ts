@@ -8,13 +8,6 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': fileURLToPath(new URL('./src', import.meta.url)),
-    }
+    },
   },
-  server: {
-    port: 5173,
-    proxy: {
-      // optional dev proxy if you prefer same origin calls in dev
-      // '/api': 'http://localhost:8000'
-    }
-  }
 })

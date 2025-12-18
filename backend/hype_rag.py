@@ -42,7 +42,7 @@ class RAGService:
     def __init__(self) -> None:
         # minimal state
         self.embeddings = EmbeddingsInfo()
-        self.embed_provider_name = os.getenv("EMBED_PROVIDER", "local").lower()
+        self.embed_provider_name = os.getenv("EMBED_PROVIDER", "local").lower() #sentence-transformers/all-MiniLM-L6-v2
         self._embed_provider = None
         if self.embed_provider_name != "local" and EmbeddingProvider is not None:
             try:

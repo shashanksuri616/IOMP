@@ -3,6 +3,7 @@ import Waves from '@/components/Waves'
 import { useTheme } from '@/lib/theme'
 import Landing from '@/pages/Landing'
 import Workbench from '@/pages/Workbench'
+import Docs from '@/pages/Docs'
 
 export default function App() {
   const { bg, theme } = useTheme()
@@ -20,6 +21,7 @@ export default function App() {
         <Routes>
           <Route path="/" element={<Landing />} />
           <Route path="/app" element={<Workbench />} />
+          <Route path="/docs" element={<Docs />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </BrowserRouter>

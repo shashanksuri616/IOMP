@@ -71,9 +71,13 @@
   overflow: hidden;
 }
 
+[data-theme='dark'] .pill-logo {
+  background: #ffffff; /* dark theme: home button background white */
+  border: 1px solid rgba(0,0,0,0.15);
+}
 [data-theme='light'] .pill-logo {
-  background: #f1f5f9;
-  border: 1px solid #e2e8f0;
+  background: #000000; /* light theme: opposite */
+  border: 1px solid rgba(255,255,255,0.2);
 }
 
 .pill-logo img {
@@ -120,14 +124,19 @@
   overflow: hidden;
 }
 
+[data-theme='dark'] .pill {
+  --pill-bg: #ffffff; /* dark theme: buttons background white */
+  --pill-text: #000000; /* text black */
+  --hover-text: #000000; /* hovered text black */
+}
 [data-theme='light'] .pill {
-  --pill-bg: #ffffff;
-  --pill-text: #0f172a;
-  --hover-text: #1e293b;
+  --pill-bg: #000000; /* light theme: opposite */
+  --pill-text: #ffffff; /* text white */
+  --hover-text: #ffffff; /* hovered text white */
 }
 
 [data-theme='light'] .pill:hover {
-  background: #f1f5f9;
+  background: #111111; /* slight lighten on hover */
 }
 
 .pill .hover-circle {
@@ -168,7 +177,7 @@
 }
 
 [data-theme='light'] .pill .pill-label-hover {
-  color: #1e293b;
+  color: #ffffff;
 }
 
 .pill.is-active::after {
@@ -185,7 +194,7 @@
 }
 
 [data-theme='light'] .pill.is-active::after {
-  background: #0f172a;
+  background: #ffffff; /* opposite of dark */
 }
 
 .desktop-only {
@@ -281,11 +290,26 @@
   pointer-events: auto;
   border: 1px solid rgba(255,255,255,0.15);
 }
-
-.pill-home-fab img, .pill-home-fab svg {
+.pill-home-icon {
   width: 24px;
   height: 24px;
   display: block;
+  color: #ffffff; /* default icon color */
+}
+
+[data-theme='dark'] .pill-home-fab {
+  background: #ffffff; /* dark theme: home button background white */
+  border: 1px solid rgba(0,0,0,0.15);
+}
+[data-theme='dark'] .pill-home-icon {
+  color: #000000; /* icon black */
+}
+[data-theme='light'] .pill-home-fab {
+  background: #000000; /* light theme: opposite */
+  border: 1px solid rgba(255,255,255,0.2);
+}
+[data-theme='light'] .pill-home-icon {
+  color: #ffffff; /* icon white */
 }
 
 .mobile-menu-list {

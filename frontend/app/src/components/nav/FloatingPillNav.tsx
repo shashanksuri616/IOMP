@@ -29,8 +29,8 @@ export default function FloatingPillNav() {
         <div className="rounded-full border bg-white/80 backdrop-blur px-3 py-1.5 shadow-sm">
           <ul className="flex items-center gap-2 text-sm">
             <li><a href="#home" className="px-3 py-1 rounded-full hover:bg-gray-100">Home</a></li>
-            <li><a href="#learn" className="px-3 py-1 rounded-full hover:bg-gray-100">How it works</a></li>
-            <li><a href="#docs" className="px-3 py-1 rounded-full hover:bg-gray-100">Docs</a></li>
+            <li><a href="#learn" className="px-3 py-1 rounded-full hover:bg-gray-100">Features</a></li>
+            <li><a href="#docs" className="px-3 py-1 rounded-full hover:bg-gray-100">HOW IT WORKS</a></li>
             <li>
               <StarButton size="sm" tone="accent" onClick={()=>navigate('/app')}>Try now</StarButton>
             </li>

@@ -50,6 +50,7 @@ async function req<T>(path: string, init?: RequestInit) {
 }
 
 export const api = {
+  health: () => req(`/health`),
   config: () => req(`/config`).then(d => schemas.config.parse(d)),
   webBuild: (body: any) => req(`/web_build`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
     .then(d => schemas.webBuildResp.parse(d)),

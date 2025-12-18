@@ -12,7 +12,7 @@ type ThemeCtx = {
 const Ctx = createContext<ThemeCtx | null>(null)
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
-  const [theme, setThemeState] = useState<Theme>('light')
+  const [theme, setThemeState] = useState<Theme>('dark')
   const [bg, setBgState] = useState<Background>('waves')
 
   useEffect(() => {
